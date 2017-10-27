@@ -28,6 +28,7 @@ namespace Tx\Realurl;
  *  This copyright notice MUST APPEAR in all copies of the script!
  ***************************************************************/
 
+use TYPO3\CMS\Core\Charset\CharsetConverter;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -658,7 +659,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             $copy_pathParts = $pathParts;
             $charset = $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] ? $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] : $GLOBALS['TSFE']->defaultCharSet;
             foreach ($copy_pathParts as $key => $value) {
-                $copy_pathParts[$key] = $GLOBALS['TSFE']->csConvObj->conv_case($charset, $value, 'toLower');
+                $copy_pathParts[$key] = mb_strtolower($value, $charset ?: 'utf-8');
             }
             while (count($copy_pathParts)) {
                 // Using pathq1 index!
@@ -1162,7 +1163,7 @@ class UriGeneratorAndResolver implements SingletonInterface
         $charset = $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] ? $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] : $GLOBALS['TSFE']->defaultCharSet;
 
         // Convert to lowercase
-        $processedTitle = $GLOBALS['TSFE']->csConvObj->conv_case($charset, $title, 'toLower');
+        $processedTitle = mb_strtolower($title, $charset ?: 'utf-8');
 
         // Strip tags
         $processedTitle = strip_tags($processedTitle);
@@ -1172,7 +1173,8 @@ class UriGeneratorAndResolver implements SingletonInterface
         $processedTitle = preg_replace('/[ \-+_]+/', $space, $processedTitle); // convert spaces
 
         // Convert extended letters to ascii equivalents
-        $processedTitle = $GLOBALS['TSFE']->csConvObj->specCharsToASCII($charset, $processedTitle);
+        $charsetConverter = GeneralUtility::makeInstance(CharsetConverter::class);
+        $processedTitle = $charsetConverter->specCharsToASCII($charset, $processedTitle);
 
         // Strip the rest
         if ($this->extConf['init']['enableAllUnicodeLetters']) {
