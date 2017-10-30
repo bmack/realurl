@@ -1118,7 +1118,7 @@ class UrlRewritingHook implements SingletonInterface
             ->from('sys_domain')
             ->where(
                 $queryBuilder->expr()->eq('domainName', $queryBuilder->createNamedParameter(GeneralUtility::getIndpEnv('HTTP_HOST'), \PDO::PARAM_STR)),
-                $queryBuilder->expr()->neq('redirectTo', '')
+                $queryBuilder->expr()->neq('redirectTo', '""')
             )
             ->execute()
             ->fetch();
@@ -2704,7 +2704,7 @@ class UrlRewritingHook implements SingletonInterface
                 ->select('pid')
                 ->from('sys_domain')
                 ->where(
-                    $queryBuilder->expr()->eq('redirectTo', '')
+                    $queryBuilder->expr()->eq('redirectTo', '""')
                 )
                 ->groupBy('pid')
                 ->execute();

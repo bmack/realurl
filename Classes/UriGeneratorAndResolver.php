@@ -578,7 +578,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                             ->from('sys_domain')
                             ->where(
                                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($rl['uid'])),
-                                $queryBuilder->expr()->eq('redirectTo', '')
+                                $queryBuilder->expr()->eq('redirectTo', '""')
                             )
                             ->orderBy('sorting')
                             ->execute()
@@ -718,9 +718,13 @@ class UriGeneratorAndResolver implements SingletonInterface
                 $row = $queryBuilder
                     ->select('tx_realurl_pathcache.*')
                     ->from('tx_realurl_pathcache')
-                    ->join('tx_realurl_pathcache', 'pages', 'pages')
+                    ->join(
+                        'tx_realurl_pathcache',
+                        'pages',
+                        'pages',
+                        $queryBuilder->expr()->eq('tx_realurl_pathcache.page_id', $queryBuilder->quoteIdentifier('pages.uid'))
+                     )
                     ->where(
-                        $queryBuilder->expr()->eq('tx_realurl_pathcache.page_id', $queryBuilder->createNamedParameter('pages.uid', \PDO::PARAM_INT)),
                         $queryBuilder->expr()->eq('pages.deleted', 0),
                         $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($this->conf['rootpage_id'], \PDO::PARAM_INT)),
                         $queryBuilder->expr()->eq('pagepath', $queryBuilder->createNamedParameter(implode('/', $copy_pathParts)))
