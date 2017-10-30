@@ -28,6 +28,10 @@ namespace Tx\Realurl\Hooks;
  *  This copyright notice MUST APPEAR in all copies of the script!
  ***************************************************************/
 
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\QueryHelper;
+use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\TimeTracker\TimeTracker;
 use TYPO3\CMS\Core\Utility\ArrayUtility;
@@ -92,8 +96,6 @@ class UrlRewritingHook implements SingletonInterface
 
     public $multidomain = false;
     public $urlPrepend = array();
-
-    public $useMySQLExtendedSyntax = false;
 
     /**
      * Holds a uid of the detected language during decoding to limit search of
@@ -172,10 +174,6 @@ class UrlRewritingHook implements SingletonInterface
      */
     public function __construct()
     {
-        if (!\TYPO3\CMS\Core\Utility\ExtensionManagementUtility::isLoaded('dbal')) {
-            // allow to use the MySQL features of 5.x with mysqli
-            $this->useMySQLExtendedSyntax = true;
-        }
         $sysconf = (array)unserialize($GLOBALS['TYPO3_CONF_VARS']['EXT']['extConf']['realurl']);
         $this->enableStrictMode = (bool)$sysconf['enableStrictMode'];
         $this->enableChashUrlDebug = (bool)$sysconf['enableChashUrlDebug'];
@@ -730,16 +728,20 @@ class UrlRewritingHook implements SingletonInterface
 
             // First, check memory, otherwise ask database
             if (!isset($GLOBALS['TSFE']->applicationData['tx_realurl']['_CACHE'][$hash]) && $this->extConf['init']['enableUrlEncodeCache']) {
-                /** @noinspection PhpUndefinedMethodInspection */
-                $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery('content', 'tx_realurl_urlencodecache',
-                                'url_hash=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($hash, 'tx_realurl_urlencodecache') .
-                                ' AND tstamp>' . strtotime('midnight', time() - 24 * 3600 * $this->encodeCacheTTL));
-                /** @noinspection PhpUndefinedMethodInspection */
-                if (false != ($row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res))) {
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('tx_realurl_urlencodecache');
+                $row = $queryBuilder
+                    ->select('content')
+                    ->from('tx_realurl_urlencodecache')
+                    ->where(
+                        $queryBuilder->expr()->eq('url_hash', $queryBuilder->createNamedParameter($hash)),
+                        $queryBuilder->expr()->gt('tstamp', strtotime('midnight', time() - 24 * 3600 * $this->encodeCacheTTL))
+                    )
+                    ->execute()
+                    ->fetch();
+                if (is_array($row)) {
                     $GLOBALS['TSFE']->applicationData['tx_realurl']['_CACHE'][$hash] = $row['content'];
                 }
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_free_result($res);
             }
             return $GLOBALS['TSFE']->applicationData['tx_realurl']['_CACHE'][$hash];
         } else { // Setting encoded URL in cache:
@@ -761,22 +763,15 @@ class UrlRewritingHook implements SingletonInterface
                             'page_id' => $this->encodePageId,
                             'tstamp' => time()
                         );
-                    if ($this->useMySQLExtendedSyntax) {
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $query = $GLOBALS['TYPO3_DB']->INSERTquery('tx_realurl_urlencodecache', $insertFields);
-                        $query .= ' ON DUPLICATE KEY UPDATE tstamp=' . $insertFields['tstamp'];
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_query($query);
-                    } else {
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_query('START TRANSACTION');
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_urlencodecache', 'url_hash=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($hash, 'tx_realurl_urlencodecache'));
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_urlencodecache', $insertFields);
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_query('COMMIT');
-                    }
+                    $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                        ->getConnectionForTable('tx_realurl_urlencodecache');
+                    $connection->beginTransaction();
+                    $connection->delete(
+                        'tx_realurl_urlencodecache',
+                        ['url_hash' => $hash]
+                    );
+                    $connection->insert('tx_realurl_urlencodecache', $insertFields);
+                    $connection->commit();
                 }
             }
         }
@@ -830,13 +825,19 @@ class UrlRewritingHook implements SingletonInterface
                     $stringForHash .= '|' . serialize($this->additionalParametersForChash);
                 }
                 $spUrlHash = md5($stringForHash);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $spUrlHashQuoted = $GLOBALS['TYPO3_DB']->fullQuoteStr($spUrlHash, 'tx_realurl_chashcache');
 
                 // first, look if a cHash is already there for this SpURL
-                /** @noinspection PhpUndefinedMethodInspection */
-                list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('chash_string',
-                    'tx_realurl_chashcache', 'spurl_hash=' . $spUrlHashQuoted);
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('tx_realurl_chashcache');
+
+                $row = $queryBuilder
+                    ->select('chash_string')
+                    ->from('tx_realurl_chashcache')
+                    ->where(
+                        $queryBuilder->expr()->eq('spurl_hash', $queryBuilder->createNamedParameter($spUrlHash))
+                    )
+                    ->execute()
+                    ->fetch();
 
                 if (!is_array($row)) {
                     // Nothing found, insert to the cache
@@ -845,8 +846,9 @@ class UrlRewritingHook implements SingletonInterface
                         'spurl_string' => $this->enableChashUrlDebug ? $stringForHash : null,
                         'chash_string' => $paramKeyValues['cHash']
                     );
-                    /** @noinspection PhpUndefinedMethodInspection */
-                    $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_chashcache', $data);
+                    GeneralUtility::makeInstance(ConnectionPool::class)
+                        ->getConnectionForTable('tx_realurl_chashcache')
+                        ->insert('tx_realurl_chashcache', $data);
                 } else {
                     // If one found, check if it is different, and if so update
                     if ($row['chash_string'] != $paramKeyValues['cHash']) {
@@ -854,12 +856,13 @@ class UrlRewritingHook implements SingletonInterface
                         // insert, that might be a bug or mean that encryptionKey was
                         // changed so cHash values will be different now
                         // In any case we will just silently update the value
-                        $data = array(
-                            'chash_string' => $paramKeyValues['cHash']
+                        GeneralUtility::makeInstance(ConnectionPool::class)
+                            ->getConnectionForTable('tx_realurl_chashcache')
+                            ->update(
+                                'tx_realurl_chashcache',
+                                ['chash_string' => $paramKeyValues['cHash']],
+                                ['spurl_hash' => $spUrlHash]
                         );
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_chashcache',
-                            'spurl_hash=' . $spUrlHashQuoted, $data);
                     }
                 }
 
@@ -1062,25 +1065,36 @@ class UrlRewritingHook implements SingletonInterface
 
         // DB defined redirects
         $hash = GeneralUtility::md5int($speakingURIpath);
-        /** @noinspection PhpUndefinedMethodInspection */
-        $url = $GLOBALS['TYPO3_DB']->fullQuoteStr($speakingURIpath, 'tx_realurl_redirects');
         $domainId = $this->getCurrentDomainId();
         /** @noinspection PhpUndefinedMethodInspection */
-        list($redirectRow) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows(
-            'destination,has_moved,domain_limit', 'tx_realurl_redirects',
-            'url_hash=' . $hash . ' AND url=' . $url . ' AND domain_limit IN (0,' . $domainId . ')',
-            '', 'domain_limit DESC');
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_realurl_redirects');
+        $redirectRow = $queryBuilder
+            ->select('destination', 'has_moved', 'domain_limit', 'counter')
+            ->from('tx_realurl_redirects')
+            ->where(
+                $queryBuilder->expr()->eq('url_hash', $queryBuilder->createNamedParameter($hash)),
+                $queryBuilder->expr()->eq('url', $queryBuilder->createNamedParameter($speakingURIpath)),
+                $queryBuilder->expr()->orX(
+                    $queryBuilder->expr()->eq('domain_limit', 0),
+                    $queryBuilder->expr()->eq('domain_limit', $domainId)
+                )
+            )
+            ->orderBy('domain_limit', 'DESC')
+            ->execute()
+            ->fetch();
         if (is_array($redirectRow)) {
             // Update statistics
-            $fields_values = array(
-                'counter' => 'counter+1',
-                'tstamp' => time(),
-                'last_referer' => GeneralUtility::getIndpEnv('HTTP_REFERER')
-            );
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_redirects',
-                'url_hash=' . $hash . ' AND url=' . $url . ' AND domain_limit=' . $redirectRow['domain_limit'],
-                $fields_values, array('counter'));
+            $queryBuilder->update('tx_realurl_redirects')
+                ->where(
+                    $queryBuilder->expr()->eq('url_hash', $queryBuilder->createNamedParameter($hash)),
+                    $queryBuilder->expr()->eq('url', $queryBuilder->createNamedParameter($speakingURIpath)),
+                    $queryBuilder->expr()->eq('domain_limit', $domainId)
+                )
+                ->set('counter', $redirectRow['counter']++)
+                ->set('tstamp', time())
+                ->set('last_referer', GeneralUtility::getIndpEnv('HTTP_REFERER'))
+                ->execute();
 
             // Redirect
             $redirectCode = ($redirectRow['has_moved'] ? 301 : 302);
@@ -1097,15 +1111,18 @@ class UrlRewritingHook implements SingletonInterface
      */
     protected function getCurrentDomainId()
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('uid',
-            'sys_domain',
-            'domainName=' . $GLOBALS['TYPO3_DB']->fullQuoteStr(GeneralUtility::getIndpEnv('HTTP_HOST'), 'sys_domain') .
-                ' AND redirectTo=\'\''
-        );
-        $result = (is_array($row) ? intval($row['uid']) : 0);
-
-        return $result;
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('sys_domain');
+        $row = $queryBuilder
+            ->select('uid')
+            ->from('sys_domain')
+            ->where(
+                $queryBuilder->expr()->eq('domainName', $queryBuilder->createNamedParameter(GeneralUtility::getIndpEnv('HTTP_HOST'), \PDO::PARAM_STR)),
+                $queryBuilder->expr()->neq('redirectTo', '')
+            )
+            ->execute()
+            ->fetch();
+        return (is_array($row) ? intval($row['uid']) : 0);
     }
 
     /**
@@ -1690,32 +1707,34 @@ class UrlRewritingHook implements SingletonInterface
         if (!$this->extConf['init']['disableErrorLog']) {
             $hash = GeneralUtility::md5int($this->speakingURIpath_procValue);
             $rootpage_id = intval($this->extConf['pagePath']['rootpage_id']);
-            $cond = 'url_hash=' . intval($hash) . ' AND rootpage_id=' . $rootpage_id;
             $fields_values = array('url_hash' => $hash, 'url' => $this->speakingURIpath_procValue, 'error' => $msg, 'counter' => 1, 'tstamp' => time(), 'cr_date' => time(), 'rootpage_id' => $rootpage_id, 'last_referer' => GeneralUtility::getIndpEnv('HTTP_REFERER'));
-            if ($this->useMySQLExtendedSyntax) {
-                /** @noinspection PhpUndefinedMethodInspection */
-                $query = $GLOBALS['TYPO3_DB']->INSERTquery('tx_realurl_errorlog', $fields_values);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $query .= ' ON DUPLICATE KEY UPDATE ' . 'error=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($msg, 'tx_realurl_errorlog') . ',' . 'counter=counter+1,' . 'tstamp=' . $fields_values['tstamp'] . ',' . 'last_referer=' . $GLOBALS['TYPO3_DB']->fullQuoteStr(GeneralUtility::getIndpEnv('HTTP_REFERER'), 'tx_realurl_errorlog');
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_query($query);
+            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('tx_realurl_errorlog');
+            $connection->beginTransaction();
+            $currentCounter = $connection
+                ->select(
+                    ['counter'],
+                    'tx_realurl_errorlog',
+                    [
+                        'url_hash' => (int)$hash,
+                        'rootpage_id' => $rootpage_id
+                    ]
+                )
+                ->fetch();
+            if ($currentCounter) {
+                $fields_values = array('error' => $msg, 'counter' => $currentCounter['counter']++, 'tstamp' => time(), 'last_referer' => GeneralUtility::getIndpEnv('HTTP_REFERER'));
+                $connection->update(
+                    'tx_realurl_errorlog',
+                    $fields_values,
+                    [
+                        'url_hash' => $hash,
+                        'rootpage_id' => $rootpage_id
+                    ]
+                );
             } else {
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_query('START TRANSACTION');
-                /** @noinspection PhpUndefinedMethodInspection */
-                list($error_row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('counter', 'tx_realurl_errorlog', $cond);
-                if (count($error_row)) {
-                    /** @noinspection PhpUndefinedMethodInspection */
-                    $fields_values = array('error' => $msg, 'counter' => $error_row['counter'] + 1, 'tstamp' => time(), 'last_referer' => GeneralUtility::getIndpEnv('HTTP_REFERER'));
-                    /** @noinspection PhpUndefinedMethodInspection */
-                    $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_errorlog', $cond, $fields_values);
-                } else {
-                    /** @noinspection PhpUndefinedMethodInspection */
-                    $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_errorlog', $fields_values);
-                }
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_query('COMMIT');
+                $connection->insert('tx_realurl_errorlog', $fields_values);
             }
+            $connection->commit();
         }
 
         // Call handler
@@ -1783,38 +1802,33 @@ class UrlRewritingHook implements SingletonInterface
                     $hash = md5($speakingURIpath . $rootpage_id);
 
                     $insertFields = array('url_hash' => $hash, 'spurl' => $speakingURIpath, 'content' => serialize($cachedInfo), 'page_id' => $cachedInfo['id'], 'rootpage_id' => $rootpage_id, 'tstamp' => time());
-                    if ($this->useMySQLExtendedSyntax) {
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $query = $GLOBALS['TYPO3_DB']->INSERTquery('tx_realurl_urldecodecache', $insertFields);
-                        $query .= ' ON DUPLICATE KEY UPDATE tstamp=' . $insertFields['tstamp'];
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_query($query);
-                    } else {
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_query('START TRANSACTION');
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_urldecodecache', 'url_hash=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($hash, 'tx_realurl_urldecodecache'));
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_urldecodecache', $insertFields);
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_query('COMMIT');
-                    }
+                    $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                        ->getConnectionForTable('tx_realurl_urldecodecache');
+                    $connection->beginTransaction();
+                    $connection->delete(
+                        'tx_realurl_urldecodecache',
+                        ['url_hash' => $hash]
+                    );
+                    $connection->insert('tx_realurl_urldecodecache', $insertFields);
+                    $connection->commit();
                 }
             } else {
                 // GET cachedInfo.
                 $rootpage_id = intval($this->extConf['pagePath']['rootpage_id']);
                 $hash = md5($speakingURIpath . $rootpage_id);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery('content', 'tx_realurl_urldecodecache',
-                    'url_hash=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($hash, 'tx_realurl_urldecodecache') .
-                    ' AND ' .
-                    //No need for root page id if we use full md5!
-                    //'rootpage_id='.intval($rootpage_id) . ' AND ' .
-                    'tstamp>' . strtotime('midnight', time() - 24 * 3600 * $this->decodeCacheTTL));
-                /** @noinspection PhpUndefinedMethodInspection */
-                $row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_free_result($res);
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('tx_realurl_urldecodecache');
+                $row = $queryBuilder
+                    ->select('content')
+                    ->from('tx_realurl_urldecodecache')
+                    ->where(
+                        //No need for root page id if we use full md5!
+                        //'rootpage_id='.intval($rootpage_id) . ' AND ' .
+                        $queryBuilder->expr()->eq('url_hash', $queryBuilder->createNamedParameter($hash, \PDO::PARAM_STR)),
+                        $queryBuilder->expr()->gt('tstamp', strtotime('midnight', time() - 24 * 3600 * $this->decodeCacheTTL))
+                    )
+                    ->execute()
+                    ->fetch();
                 if ($row) {
                     return unserialize($row['content']);
                 }
@@ -1856,23 +1870,16 @@ class UrlRewritingHook implements SingletonInterface
             $stringForHash .= '|' . serialize($this->additionalParametersForChash);
         }
 
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('chash_string',
-            'tx_realurl_chashcache', 'spurl_hash=' .
-            $GLOBALS['TYPO3_DB']->fullQuoteStr(md5($stringForHash),
-                'tx_realurl_chashcache'));
-
-        if (!is_array($row) && $stringForHash != $speakingURIpath) {
-            // Use a more generic query if specific fails. This can happen when
-            // using _DOMAINS and the variable is set to 'bypass'.
-            $stringForHash = $speakingURIpath;
-            /** @noinspection PhpUndefinedMethodInspection */
-            list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('chash_string',
-                'tx_realurl_chashcache', 'spurl_hash=' .
-                $GLOBALS['TYPO3_DB']->fullQuoteStr(md5($stringForHash),
-                    'tx_realurl_chashcache'));
-        }
-
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_realurl_chashcache');
+        $row = $queryBuilder
+            ->select('chash_string')
+            ->from('tx_realurl_chashcache')
+            ->where(
+                $queryBuilder->expr()->eq('spurl_hash', $queryBuilder->createNamedParameter(md5($stringForHash), \PDO::PARAM_STR))
+            )
+            ->execute()
+            ->fetch();
         return is_array($row) ? $row['chash_string'] : false;
     }
 
@@ -1910,14 +1917,23 @@ class UrlRewritingHook implements SingletonInterface
                 return $returnId;
             } else { // If no cached entry, look it up directly in the table:
                 $fieldList[] = $cfg['id_field'];
-                /** @noinspection PhpUndefinedMethodInspection */
-                $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery(implode(',', $fieldList), $cfg['table'],
-                                    $cfg['alias_field'] . '=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($value, $cfg['table']) .
-                                    ' ' . $cfg['addWhereClause']);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_free_result($res);
+
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable($cfg['table']);
+                $queryBuilder->getRestrictions()->removeAll();
+                $queryBuilder
+                    ->select($fieldList)
+                    ->from($cfg['table'])
+                    ->where(
+                        $queryBuilder->expr()->eq($cfg['alias_field'], $queryBuilder->createNamedParameter($value))
+                    );
+
+                if ($cfg['addWhereClause']) {
+                    $queryBuilder->andWhere(QueryHelper::stripLogicalOperatorPrefix($cfg['addWhereClause']));
+                }
+                $row = $queryBuilder
+                    ->execute()
+                    ->fetch();
                 if ($row) {
                     $returnId = $row[$cfg['id_field']];
 
@@ -1944,29 +1960,43 @@ class UrlRewritingHook implements SingletonInterface
             } else { // If no cached entry, look up alias directly in the table (and possibly store cache value)
 
                 $fieldList[] = $cfg['alias_field'];
-                /** @noinspection PhpUndefinedMethodInspection */
-                $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery(implode(',', $fieldList), $cfg['table'],
-                            $cfg['id_field'] . '=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($value, $cfg['table']) .
-                            ' ' . $cfg['addWhereClause']);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res);
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_free_result($res);
-                if ($row) {
 
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable($cfg['table']);
+                $queryBuilder->getRestrictions()->removeAll();
+                $queryBuilder->select($fieldList)
+                    ->from($cfg['table'])
+                    ->where(
+                        $queryBuilder->expr()->eq($cfg['id_field'], $queryBuilder->createNamedParameter($value))
+                    );
+
+                if ($cfg['addWhereClause']) {
+                    $queryBuilder->andWhere(QueryHelper::stripLogicalOperatorPrefix($cfg['addWhereClause']));
+                }
+                $row = $queryBuilder
+                    ->execute()
+                    ->fetch();
+
+                if ($row) {
                     // Looking for localized version of that
                     if ($langEnabled && $lang) {
 
                         // If the lang value is there, look for a localized version of record
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery($cfg['alias_field'], $cfg['table'],
-                                $cfg['transOrigPointerField'] . '=' . intval($row['uid']) . '
-                                AND ' . $cfg['languageField'] . '=' . intval($lang) . '
-                                ' . $cfg['addWhereClause']);
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $lrow = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res);
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $GLOBALS['TYPO3_DB']->sql_free_result($res);
+                        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                            ->getQueryBuilderForTable($cfg['table']);
+                        $queryBuilder->getRestrictions()->removeAll();
+                        $queryBuilder->select($cfg['alias_field'])
+                            ->from($cfg['table'])
+                            ->where(
+                                $queryBuilder->expr()->eq($cfg['transOrigPointerField'], $queryBuilder->createNamedParameter($row['uid'], \PDO::PARAM_INT)),
+                                $queryBuilder->expr()->eq($cfg['languageField'], $queryBuilder->createNamedParameter($lang, \PDO::PARAM_INT))
+                            );
+                        if ($cfg['addWhereClause']) {
+                            $queryBuilder->andWhere(QueryHelper::stripLogicalOperatorPrefix($cfg['addWhereClause']));
+                        }
+                        $lrow = $queryBuilder
+                            ->execute()
+                            ->fetch();
                         if ($lrow) {
                             $row = $lrow;
                         }
@@ -1977,10 +2007,7 @@ class UrlRewritingHook implements SingletonInterface
                     if ($cfg['useUniqueCache']) { // If cache is to be used, store the alias in the cache:
                         /** @var \TYPO3\CMS\Core\Charset\CharsetConverter $csConvObj */
                         $csConvObj = GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\Charset\\CharsetConverter');
-                        $aliasValue = $row[$cfg['alias_field']];
-                        if ($csConvObj->strlen('utf-8', $aliasValue) > $maximumAliasLength) {
-                            $aliasValue = $csConvObj->crop('utf-8', $aliasValue, $maximumAliasLength);
-                        }
+                        $aliasValue = $csConvObj->crop('utf-8', $row[$cfg['alias_field']], $maximumAliasLength);
                         return $this->lookUp_newAlias($cfg, $aliasValue, $value, $lang);
                     } else { // If no cache for alias, then just return whatever value is appropriate:
                         if (strlen($row[$cfg['alias_field']]) <= $maximumAliasLength) {
@@ -2010,13 +2037,30 @@ class UrlRewritingHook implements SingletonInterface
      */
     protected function lookUp_uniqAliasToId($cfg, $aliasValue, $onlyNonExpired = false)
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('value_id', 'tx_realurl_uniqalias',
-                'value_alias=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($aliasValue, 'tx_realurl_uniqalias') .
-                ' AND field_alias=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['alias_field'], 'tx_realurl_uniqalias') .
-                ' AND field_id=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['id_field'], 'tx_realurl_uniqalias') .
-                ' AND tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['table'], 'tx_realurl_uniqalias') .
-                ' AND ' . ($onlyNonExpired ? 'expire=0' : '(expire=0 OR expire>' . time() . ')'));
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_realurl_uniqalias');
+        $queryBuilder
+            ->select('value_id')
+            ->from('tx_realurl_uniqalias')
+            ->where(
+                $queryBuilder->expr()->eq('value_alias', $queryBuilder->createNamedParameter($aliasValue)),
+                $queryBuilder->expr()->eq('field_alias', $queryBuilder->createNamedParameter($cfg['alias_field'])),
+                $queryBuilder->expr()->eq('field_id', $queryBuilder->createNamedParameter($cfg['id_field'])),
+                $queryBuilder->expr()->eq('tablename', $queryBuilder->createNamedParameter($cfg['table']))
+            );
+        if ($onlyNonExpired) {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq('expire', 0)
+            );
+        } else {
+            $queryBuilder->andWhere(
+                $queryBuilder->orWhere(
+                    $queryBuilder->expr()->eq('expire', 0),
+                    $queryBuilder->expr()->lt('expire', time())
+                )
+            );
+        }
+        $row = $queryBuilder->execute()->fetch();
         return (is_array($row) ? $row['value_id'] : false);
     }
 
@@ -2033,20 +2077,29 @@ class UrlRewritingHook implements SingletonInterface
      */
     protected function lookUp_idToUniqAlias($cfg, $idValue, $lang, $aliasValue = '')
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('value_alias', 'tx_realurl_uniqalias',
-                'value_id=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($idValue, 'tx_realurl_uniqalias') .
-                ' AND field_alias=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['alias_field'], 'tx_realurl_uniqalias') .
-                ' AND field_id=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['id_field'], 'tx_realurl_uniqalias') .
-                ' AND tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['table'], 'tx_realurl_uniqalias') .
-                ' AND lang=' . intval($lang) .
-                ' AND expire=0' .
-                ($aliasValue ? ' AND value_alias=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($aliasValue, 'tx_realurl_uniqalias') : ''),
-                '', '', '1');
-        if (is_array($row)) {
-            return $row['value_alias'];
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_realurl_uniqalias');
+        $queryBuilder
+            ->select('value_alias')
+            ->from('tx_realurl_uniqalias')
+            ->where(
+                $queryBuilder->expr()->eq('value_id', $queryBuilder->createNamedParameter($idValue)),
+                $queryBuilder->expr()->eq('field_alias', $queryBuilder->createNamedParameter($cfg['alias_field'])),
+                $queryBuilder->expr()->eq('field_id', $queryBuilder->createNamedParameter($cfg['id_field'])),
+                $queryBuilder->expr()->eq('tablename', $queryBuilder->createNamedParameter($cfg['table'])),
+                $queryBuilder->expr()->eq('lang', $queryBuilder->createNamedParameter($lang, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->eq('expire', 0)
+            )
+            ->setMaxResults(1);
+
+        if ($aliasValue) {
+            $queryBuilder->andWhere(
+                $queryBuilder->expr()->eq('value_alias', $queryBuilder->createNamedParameter($aliasValue))
+            );
         }
-        return null;
+        $row = $queryBuilder->execute()->fetch();
+        return (is_array($row) ? $row['value_alias'] : null);
+
     }
 
     /**
@@ -2109,17 +2162,23 @@ class UrlRewritingHook implements SingletonInterface
         } else {
             // Expire all other aliases
             // Look for an alias based on ID
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_uniqalias', 'value_id=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($idValue, 'tx_realurl_uniqalias') . '
-                    AND field_alias=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['alias_field'], 'tx_realurl_uniqalias') . '
-                    AND field_id=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['id_field'], 'tx_realurl_uniqalias') . '
-                    AND tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($cfg['table'], 'tx_realurl_uniqalias') . '
-                    AND lang=' . intval($lang) . '
-                    AND expire=0', array('expire' => time() + 24 * 3600 * ($cfg['expireDays'] ? $cfg['expireDays'] : 60)));
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tx_realurl_uniqalias');
+            $queryBuilder
+                ->update('tx_realurl_uniqalias')
+                ->where(
+                    $queryBuilder->expr()->eq('value_id', $queryBuilder->createNamedParameter($idValue)),
+                    $queryBuilder->expr()->eq('field_alias', $queryBuilder->createNamedParameter($cfg['alias_field'])),
+                    $queryBuilder->expr()->eq('field_id', $queryBuilder->createNamedParameter($cfg['id_field'])),
+                    $queryBuilder->expr()->eq('tablename', $queryBuilder->createNamedParameter($cfg['table'])),
+                    $queryBuilder->expr()->eq('lang', $queryBuilder->createNamedParameter($lang, \PDO::PARAM_INT)),
+                    $queryBuilder->expr()->eq('expire', 0)
+                )
+                ->set('expire', time() + 24 * 3600 * ($cfg['expireDays'] ? $cfg['expireDays'] : 60))
+                ->execute();
 
             // Store new alias
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_uniqalias', $insertArray);
+            $queryBuilder->insert('tx_realurl_uniqalias')->values($insertArray)->execute();
         }
 
         // Return new unique alias
@@ -2315,14 +2374,19 @@ class UrlRewritingHook implements SingletonInterface
     {
         // Look in memory cache first, and if not there, look it up
         if (!isset($GLOBALS['TSFE']->applicationData['tx_realurl']['_CACHE_aliases'][$alias])) {
-            /** @noinspection PhpUndefinedMethodInspection */
-            $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery('uid', 'pages',
-                'alias=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($alias, 'pages') .
-                ' AND pages.deleted=0');
-            /** @noinspection PhpUndefinedMethodInspection */
-            $pageRec = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res);
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->sql_free_result($res);
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('pages');
+            $queryBuilder->getRestrictions()
+                ->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+            $pageRec = $queryBuilder
+                ->select('uid')
+                ->from('pages')
+                ->where(
+                    $queryBuilder->expr()->eq('alias', $queryBuilder->createNamedParameter('alias', $alias))
+                )
+                ->execute()
+                ->fetch();
             $GLOBALS['TSFE']->applicationData['tx_realurl']['_CACHE_aliases'][$alias] = intval($pageRec['uid']);
         }
 
@@ -2558,10 +2622,19 @@ class UrlRewritingHook implements SingletonInterface
 
             $testedDomains = array($host => 1);
             do {
-                /** @noinspection PhpUndefinedMethodInspection */
-                $domain = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('pid,redirectTo,domainName', 'sys_domain',
-                    'domainName=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($host, 'sys_domain') .
-                    ' AND hidden=0');
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('sys_domain');
+                $queryBuilder->getRestrictions()
+                    ->removeAll()
+                    ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+                $domain = $queryBuilder
+                    ->select('pid', 'redirectTo', 'domainName')
+                    ->from('sys_domain')
+                    ->where(
+                        $queryBuilder->expr()->eq('domainName', $queryBuilder->createNamedParameter($host))
+                    )
+                    ->execute()
+                    ->fetchAll();
                 if (count($domain) > 0) {
                     if (!$domain[0]['redirectTo']) {
                         $rootpage_id = intval($domain[0]['pid']);
@@ -2588,9 +2661,20 @@ class UrlRewritingHook implements SingletonInterface
             // get a lot of wrong page ids from old root pages, etc.
             if (!$rootpage_id && !$this->multidomain) {
                 // Try by TS template
-                /** @noinspection PhpUndefinedMethodInspection */
-                $rows = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('pid',
-                            'sys_template', 'root=1 AND hidden=0 AND deleted=0');
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('sys_template');
+                $queryBuilder->getRestrictions()
+                    ->removeAll()
+                    ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+                    ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+                $rows = $queryBuilder
+                    ->select('pid')
+                    ->from('sys_template')
+                    ->where(
+                        $queryBuilder->expr()->eq('root', 1)
+                    )
+                    ->execute()
+                    ->fetchAll();
                 if (count($rows) == 1) {
                     $rootpage_id = $rows[0]['pid'];
                     $this->devLog('Found rootpage_id by searching sys_template', array('rootpage_id' => $rootpage_id));
@@ -2611,9 +2695,20 @@ class UrlRewritingHook implements SingletonInterface
 
         if ($multidomain === null) {
             /** @noinspection PhpUndefinedMethodInspection */
-            list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('COUNT(distinct pid) AS t',
-                'sys_domain', 'redirectTo=\'\' AND hidden=0');
-            $multidomain = ($row['t'] > 1);
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('sys_domain');
+            $queryBuilder->getRestrictions()
+                ->removeAll()
+                ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+            $result = $queryBuilder
+                ->select('pid')
+                ->from('sys_domain')
+                ->where(
+                    $queryBuilder->expr()->eq('redirectTo', '')
+                )
+                ->groupBy('pid')
+                ->execute();
+            $multidomain = ($result->rowCount() > 1);
         }
         return $multidomain;
     }
@@ -2817,9 +2912,15 @@ class UrlRewritingHook implements SingletonInterface
      */
     protected function canCachePageURL($pageId)
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($pageRecord) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('tx_realurl_nocache',
-            'pages', 'uid=' . intval($pageId));
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $pageRecord = $queryBuilder->select('tx_realurl_nocache')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
+            )
+            ->execute()
+            ->fetch();
         return is_array($pageRecord) ? !$pageRecord['tx_realurl_nocache'] : false;
     }
 
@@ -2839,10 +2940,6 @@ class UrlRewritingHook implements SingletonInterface
      */
     protected function getTimeTracker()
     {
-        if (is_object($GLOBALS['TT'])) {
-            // @deprecated since 8.0, will be removed once 7.6 support will be removed
-            return $GLOBALS['TT'];
-        }
         return GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\TimeTracker\\TimeTracker');
     }
 }

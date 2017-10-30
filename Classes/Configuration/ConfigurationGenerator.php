@@ -27,7 +27,9 @@ namespace Tx\Realurl\Configuration;
 *  This copyright notice MUST APPEAR in all copies of the script!
 ***************************************************************/
 
-use TYPO3\CMS\Core\Locking\LockFactory;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\Locking\LockingStrategyInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -42,11 +44,6 @@ class ConfigurationGenerator
     const AUTOCONFIGURTION_FILE = 'typo3conf/realurl_autoconf.php';
 
     /**
-     * @var \TYPO3\CMS\Core\Database\DatabaseConnection
-     */
-    protected $databaseConnection;
-
-    /**
      * @var bool
      */
     protected $hasStaticInfoTables;
@@ -59,19 +56,12 @@ class ConfigurationGenerator
     public function generateConfiguration()
     {
         $fileName = PATH_site . self::AUTOCONFIGURTION_FILE;
-        if (class_exists('TYPO3\\CMS\\Core\\Locking\\LockFactory')) {
-            $lockFactory = GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\Locking\\LockFactory');
-            $lockObject = $lockFactory->createLocker(
-                $fileName,
-                LockingStrategyInterface::LOCK_CAPABILITY_EXCLUSIVE | LockingStrategyInterface::LOCK_CAPABILITY_NOBLOCK
-                );
-            $lockObject->acquire();
-        } else {
-            // @deprecated since 7.6, will be removed once 6.2 support is removed
-            $lockObject = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\Locking\\Locker', $fileName, $GLOBALS['TYPO3_CONF_VARS']['SYS']['lockingMode']);
-            $lockObject->setEnableLogging(false);
-            $lockObject->acquireExclusiveLock();
-        }
+        $lockFactory = GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\Locking\\LockFactory');
+        $lockObject = $lockFactory->createLocker(
+            $fileName,
+            LockingStrategyInterface::LOCK_CAPABILITY_EXCLUSIVE | LockingStrategyInterface::LOCK_CAPABILITY_NOBLOCK
+            );
+        $lockObject->acquire();
         $fd = @fopen($fileName, 'a+');
         if ($fd) {
             // Check size
@@ -93,22 +83,35 @@ class ConfigurationGenerator
      */
     protected function doGenerateConfiguration(&$fd)
     {
-        $this->databaseConnection = $GLOBALS['TYPO3_DB'];
-
         $this->hasStaticInfoTables = \TYPO3\CMS\Core\Utility\ExtensionManagementUtility::isLoaded('static_info_tables');
 
         $conf = array();
         $template = $this->getTemplate();
 
         // Find all domains
-        $domains = $this->databaseConnection->exec_SELECTgetRows('pid,domainName,redirectTo', 'sys_domain', 'hidden=0',
-                '', '', '', 'domainName');
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('sys_domain');
+        $domains = $queryBuilder
+            ->select('pid', 'domainName', 'redirectTo')
+            ->from('sys_domain')
+            ->execute()
+            ->fetchAll();
         if (count($domains) == 0) {
             $conf['_DEFAULT'] = $template;
-            $rows = $this->databaseConnection->exec_SELECTgetRows('uid', 'pages',
-                        'deleted=0 AND hidden=0 AND is_siteroot=1', '', '', '1');
-            if (count($rows) > 0) {
-                $conf['_DEFAULT']['pagePath']['rootpage_id'] = $rows[0]['uid'];
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages');
+            $queryBuilder->getRestrictions()->removeAll()
+                ->add(GeneralUtility::makeInstance(DeletedRestriction::class))
+                ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
+            $firstRootPageUid = $queryBuilder
+                ->select('uid')
+                ->from('pages')
+                ->where(
+                    $queryBuilder->expr()->eq('is_siteroot', 1)
+                )
+                ->setMaxResults(1)
+                ->execute()
+                ->fetchColumn();
+            if ((int)$firstRootPageUid > 0) {
+                $conf['_DEFAULT']['pagePath']['rootpage_id'] = $firstRootPageUid;
             }
         } else {
             foreach ($domains as $domain) {
@@ -214,10 +217,24 @@ class ConfigurationGenerator
      */
     protected function addLanguages(&$conf)
     {
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('sys_language');
         if ($this->hasStaticInfoTables) {
-            $languages = $this->databaseConnection->exec_SELECTgetRows('t1.uid AS uid,t2.lg_iso_2 AS lg_iso_2', 'sys_language t1, static_languages t2', 't2.uid=t1.static_lang_isocode AND t1.hidden=0');
+            $languages = $queryBuilder
+                ->select('sys_language_uid AS uid', 'static_languages.lg_iso_2 AS isocode')
+                ->from('sys_language')
+                ->join(
+                    'sys_language',
+                    'static_languages',
+                    'static_languages',
+                    $queryBuilder->expr()->eq('sys_language.static_lang_isocode', $queryBuilder->quoteIdentifier('static_languages.uid'))
+                )
+                ->execute()
+                ->fetchAll();
         } else {
-            $languages = $this->databaseConnection->exec_SELECTgetRows('t1.uid AS uid,t1.uid AS lg_iso_2', 'sys_language t1', 't1.hidden=0');
+            $languages = $queryBuilder->select('uid', 'language_isocode AS isocode')
+                ->from('sys_language')
+                ->execute()
+                ->fetchAll();
         }
         if (count($languages) > 0) {
             $conf['preVars'] = array(
@@ -229,7 +246,7 @@ class ConfigurationGenerator
                 ),
             );
             foreach ($languages as $lang) {
-                $conf['preVars'][0]['valueMap'][strtolower($lang['lg_iso_2'])] = $lang['uid'];
+                $conf['preVars'][0]['valueMap'][strtolower($lang['isocode'] ? $lang['isocode'] : $lang['uid'])] = $lang['uid'];
             }
         }
     }

@@ -29,6 +29,12 @@ namespace Tx\Realurl;
  ***************************************************************/
 
 use TYPO3\CMS\Core\Charset\CharsetConverter;
+use TYPO3\CMS\Core\Database\Connection;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
+use TYPO3\CMS\Core\Database\Query\Restriction\DeletedRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\FrontendGroupRestriction;
+use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -237,13 +243,21 @@ class UriGeneratorAndResolver implements SingletonInterface
     {
         $result = false;
         if (!$this->conf['disablePathCache']) {
-            /** @noinspection PhpUndefinedMethodInspection */
-            list($cachedPagePath) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('pagepath', 'tx_realurl_pathcache',
-                'page_id=' . intval($pageid) .
-                ' AND language_id=' . intval($lang) .
-                ' AND rootpage_id=' . intval($this->conf['rootpage_id']) .
-                ' AND mpvar=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($mpvar, 'tx_realurl_pathcache') .
-                ' AND expire=0', '', '', 1);
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tx_realurl_pathcache');
+            $cachedPagePath = $queryBuilder
+                ->select('pagepath')
+                ->from('tx_realurl_pathcache')
+                ->where(
+                    $queryBuilder->expr()->eq('page_id', $queryBuilder->createNamedParameter($pageid, \PDO::PARAM_INT)),
+                    $queryBuilder->expr()->eq('language_id', $queryBuilder->createNamedParameter($lang, \PDO::PARAM_INT)),
+                    $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($this->conf['rootpage_id'], \PDO::PARAM_INT)),
+                    $queryBuilder->expr()->eq('mpvar', $queryBuilder->createNamedParameter($mpvar)),
+                    $queryBuilder->expr()->eq('expire', 0)
+                )
+                ->setMaxResults(1)
+                ->execute()
+                ->fetch();
             if (is_array($cachedPagePath)) {
                 $result = $cachedPagePath['pagepath'];
             }
@@ -289,21 +303,23 @@ class UriGeneratorAndResolver implements SingletonInterface
         $canCachePaths = !$this->conf['disablePathCache'] && !$this->pObj->isBEUserLoggedIn();
         $newPathDiffers = ((string)$pagePath !== (string)$cachedPagePath);
         if ($canCachePaths && $newPathDiffers) {
-            /** @noinspection PhpUndefinedMethodInspection */
-            $cacheCondition = 'page_id=' . intval($pageId) .
-                ' AND language_id=' . intval($langId) .
-                ' AND rootpage_id=' . intval($rootPageId) .
-                ' AND mpvar=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($mpvar, 'tx_realurl_pathcache');
+            $connection = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('tx_realurl_pathcache');
 
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->sql_query('START TRANSACTION');
+            $connection->beginTransaction();
 
-            $this->removeExpiredPathCacheEntries();
-            $this->setExpirationOnOldPathCacheEntries($pagePath, $cacheCondition);
-            $this->addNewPagePathEntry($pagePath, $cacheCondition, $pageId, $mpvar, $langId, $rootPageId);
+            $queryBuilder = $connection->createQueryBuilder();
+            $queryBuilder->where(
+                $queryBuilder->expr()->eq('page_id', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->eq('language_id', $queryBuilder->createNamedParameter($langId, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($rootPageId, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->eq('mpvar', $queryBuilder->createNamedParameter($mpvar))
+            );
+            $this->removeExpiredPathCacheEntries($connection);
+            $this->setExpirationOnOldPathCacheEntries(clone $queryBuilder, $pagePath);
+            $this->addNewPagePathEntry(clone $queryBuilder, $pagePath, $pageId, $mpvar, $langId, $rootPageId);
 
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->sql_query('COMMIT');
+            $connection->commit();
         }
     }
 
@@ -377,13 +393,20 @@ class UriGeneratorAndResolver implements SingletonInterface
      */
     protected function getPage($pageId, $languageId)
     {
-        $condition = 'uid=' . intval($pageId) . $GLOBALS['TSFE']->sys_page->where_hid_del;
         // Note: we do not use $GLOBALS['TSFE']->sys_page->where_groupAccess here
         // because we will not come here unless typolinkLinkAccessRestrictedPages
         // was active in 'config' or 'typolink'
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('*', 'pages',
-            $condition);
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeByType(FrontendGroupRestriction::class);
+        $row = $queryBuilder
+            ->select('*')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
+            )
+            ->execute()
+            ->fetch();
         if (is_array($row) && $languageId > 0) {
             $row = $GLOBALS['TSFE']->sys_page->getPageOverlay($row, $languageId);
         }
@@ -393,33 +416,40 @@ class UriGeneratorAndResolver implements SingletonInterface
     /**
      * Adds a new entry to the path cache or revitalizes existing ones
      *
+     * @param QueryBuilder $queryBuilder
      * @param string $currentPagePath
-     * @param string $pathCacheCondition
      * @param int $pageId
      * @param string $mpvar
      * @param int $langId
      * @param int $rootPageId
      * @return void
      */
-    protected function addNewPagePathEntry($currentPagePath, $pathCacheCondition, $pageId, $mpvar, $langId, $rootPageId)
+    protected function addNewPagePathEntry(QueryBuilder $queryBuilder, $currentPagePath, $pageId, $mpvar, $langId, $rootPageId)
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        $condition = $pathCacheCondition . ' AND pagepath=' .
-            $GLOBALS['TYPO3_DB']->fullQuoteStr($currentPagePath, 'tx_realurl_pathcache');
-        $revitalizationCondition = $condition . ' AND expire<>0';
+        $queryBuilder->andWhere(
+            $queryBuilder->expr()->eq('pagepath', $queryBuilder->createNamedParameter($currentPagePath))
+        );
+        $revitalizationQueryBuilder = clone $queryBuilder;
 
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($revitalizationCount) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('COUNT(*) AS t',
-            'tx_realurl_pathcache', $revitalizationCondition);
-        if ($revitalizationCount['t'] > 0) {
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache', $revitalizationCondition, array('expire' => 0));
+        $revitalizationCount = $revitalizationQueryBuilder->count('*')
+            ->from('tx_realurl_pathcache')
+            ->andWhere(
+                $revitalizationQueryBuilder->expr()->neq('expire', 0)
+            )
+            ->execute()
+            ->fetchColumn();
+        if ($revitalizationCount > 0) {
+            $queryBuilder->update('tx_realurl_pathcache', ['expire' => 0]);
         } else {
-            $createCondition = $condition . ' AND expire=0';
-            /** @noinspection PhpUndefinedMethodInspection */
-            list($createCount) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('COUNT(*) AS t',
-                'tx_realurl_pathcache', $createCondition);
-            if ($createCount['t'] == 0) {
+            $queryBuilderWithoutExpiration = clone $queryBuilder;
+            $createCount = $queryBuilderWithoutExpiration->count('*')
+                ->from('tx_realurl_pathcache')
+                ->andWhere(
+                    $queryBuilderWithoutExpiration->expr()->eq('expire', 0)
+                )
+                ->execute()
+                ->fetchColumn();
+            if ($createCount === 0) {
                 $insertArray = array(
                     'page_id' => $pageId,
                     'language_id' => $langId,
@@ -428,8 +458,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                     'rootpage_id' => $rootPageId,
                     'mpvar' => $mpvar
                 );
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_pathcache', $insertArray);
+                $queryBuilder->insert('tx_realurl_pathcache')->values($insertArray);
             }
         }
     }
@@ -437,40 +466,41 @@ class UriGeneratorAndResolver implements SingletonInterface
     /**
      * Sets expiration time for the old path cache entries
      *
+     * @param QueryBuilder $queryBuilder
      * @param string $currentPagePath
-     * @param string $pathCacheCondition
      * @return void
      */
-    protected function setExpirationOnOldPathCacheEntries($currentPagePath, $pathCacheCondition)
+    protected function setExpirationOnOldPathCacheEntries(QueryBuilder $queryBuilder, $currentPagePath)
     {
         $expireDays = (isset($this->conf['expireDays']) ? $this->conf['expireDays'] : 60) * 24 * 3600;
-        /** @noinspection PhpUndefinedMethodInspection */
-        $condition = $pathCacheCondition . ' AND expire=0 AND pagepath<>' .
-            $GLOBALS['TYPO3_DB']->fullQuoteStr($currentPagePath, 'tx_realurl_pathcache');
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache', $condition,
-            array(
-                'expire' => $this->makeExpirationTime($expireDays)
-            ),
-            'expire'
+        $queryBuilder->andWhere(
+            $queryBuilder->expr()->eq('expire', 0),
+            $queryBuilder->expr()->neq('pagepath', $queryBuilder->createNamedParameter($currentPagePath))
         );
+        $queryBuilder->update('tx_realurl_pathcache')->set('expire', $this->makeExpirationTime($expireDays));
     }
 
     /**
      * Removes all expired path cache entries
      *
+     * @param Connection $connection
      * @return void
      */
-    protected function removeExpiredPathCacheEntries()
+    protected function removeExpiredPathCacheEntries(Connection $connection)
     {
         $lastCleanUpFileName = PATH_site . 'typo3temp/realurl_last_clean_up';
         $lastCleanUpTime = @filemtime($lastCleanUpFileName);
         if ($lastCleanUpTime === false || (time() - $lastCleanUpTime >= 6*60*60)) {
             touch($lastCleanUpFileName);
             GeneralUtility::fixPermissions($lastCleanUpFileName);
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_pathcache',
-                'expire>0 AND expire<' . $this->makeExpirationTime());
+            $queryBuilder = $connection->createQueryBuilder();
+            $queryBuilder
+                ->delete('tx_realurl_pathcache')
+                ->where(
+                    $queryBuilder->expr()->gt('expire', 0),
+                    $queryBuilder->expr()->lt('expire', $queryBuilder->createNamedParameter($this->makeExpirationTime(), \PDO::PARAM_INT))
+                )
+                ->execute();
         }
     }
 
@@ -537,9 +567,22 @@ class UriGeneratorAndResolver implements SingletonInterface
                 $parts = parse_url($pagePath);
                 $this->pObj->devLog('$innerSubDomain=true, showing page path parts', $parts);
                 if ($parts['host'] == '') {
+                    $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                        ->getQueryBuilderForTable('sys_domain');
+                    $queryBuilder->getRestrictions()
+                        ->removeAll()
+                        ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
                     foreach ($newRootLine as $rl) {
-                        /** @noinspection PhpUndefinedMethodInspection */
-                        $rows = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('domainName', 'sys_domain', 'pid=' . $rl['uid'] . ' AND redirectTo=\'\' AND hidden=0', '', 'sorting');
+                        $rows = $queryBuilder
+                            ->select('domainName')
+                            ->from('sys_domain')
+                            ->where(
+                                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($rl['uid'])),
+                                $queryBuilder->expr()->eq('redirectTo', '')
+                            )
+                            ->orderBy('sorting')
+                            ->execute()
+                            ->fetchAll();
                         if (count($rows)) {
                             $domain = $rows[0]['domainName'];
                             $this->pObj->devLog('Found domain', $domain);
@@ -586,14 +629,21 @@ class UriGeneratorAndResolver implements SingletonInterface
             if (!$page['tx_realurl_exclude'] && !$stopUsingCache && !$this->conf['disablePathCache']) {
 
                 // Using pathq2 index!
-                /** @noinspection PhpUndefinedMethodInspection */
-                list($cachedPagePath) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('pagepath', 'tx_realurl_pathcache',
-                                'page_id=' . intval($page['uid']) .
-                                ' AND language_id=' . intval($lang) .
-                                ' AND rootpage_id=' . intval($this->conf['rootpage_id']) .
-                                ' AND mpvar=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($page['_MP_PARAM'], 'tx_realurl_pathcache') .
-                                ' AND expire=0', '', '', 1);
-
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('tx_realurl_pathcache');
+                $cachedPagePath = $queryBuilder
+                    ->select('pagepath')
+                    ->from('tx_realurl_pathcache')
+                    ->where(
+                        $queryBuilder->expr()->eq('page_id', $queryBuilder->createNamedParameter($page['uid'], \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('language_id', $queryBuilder->createNamedParameter($lang, \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($this->conf['rootpage_id'], \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('mpvar', $queryBuilder->createNamedParameter($page['_MP_PARAM'], \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('expire', 0)
+                    )
+                    ->setMaxResults(1)
+                    ->execute()
+                    ->fetch();
                 if (is_array($cachedPagePath)) {
                     $lastPath = implode('/', $paths);
                     $this->pObj->devLog('rootLineToPath found path', $lastPath);
@@ -663,14 +713,22 @@ class UriGeneratorAndResolver implements SingletonInterface
             }
             while (count($copy_pathParts)) {
                 // Using pathq1 index!
-                /** @noinspection PhpUndefinedMethodInspection */
-                list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows(
-                        'tx_realurl_pathcache.*', 'tx_realurl_pathcache,pages',
-                        'tx_realurl_pathcache.page_id=pages.uid AND pages.deleted=0' .
-                        ' AND rootpage_id=' . intval($this->conf['rootpage_id']) .
-                        ' AND pagepath=' . $GLOBALS['TYPO3_DB']->fullQuoteStr(implode('/', $copy_pathParts), 'tx_realurl_pathcache'),
-                        '', 'expire', '1');
-
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('tx_realurl_pathcache');
+                $row = $queryBuilder
+                    ->select('tx_realurl_pathcache.*')
+                    ->from('tx_realurl_pathcache')
+                    ->join('tx_realurl_pathcache', 'pages', 'pages')
+                    ->where(
+                        $queryBuilder->expr()->eq('tx_realurl_pathcache.page_id', $queryBuilder->createNamedParameter('pages.uid', \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('pages.deleted', 0),
+                        $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($this->conf['rootpage_id'], \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('pagepath', $queryBuilder->createNamedParameter(implode('/', $copy_pathParts)))
+                    )
+                    ->orderBy('expire')
+                    ->setMaxResults(1)
+                    ->execute()
+                    ->fetch();
                 // This lookup does not include language and MP var since those are supposed to be fully reflected in the built url!
                 if (is_array($row)) {
                     break;
@@ -715,11 +773,24 @@ class UriGeneratorAndResolver implements SingletonInterface
                 $this->pObj->devLog('pagePathToId found row', $row);
                 // 'expire' in the query is only for logging
                 // Using pathq2 index!
-                /** @noinspection PhpUndefinedMethodInspection */
-                list($newEntry) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('pagepath,expire', 'tx_realurl_pathcache',
-                        'page_id=' . intval($row['page_id']) . '
-						AND language_id=' . intval($row['language_id']) . '
-						AND (expire=0 OR expire>' . $row['expire'] . ')', '', 'expire', '1');
+
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                    ->getQueryBuilderForTable('tx_realurl_pathcache');
+                $newEntry = $queryBuilder
+                    ->select('pagepath', 'expire')
+                    ->from('tx_realurl_pathcache')
+                    ->where(
+                        $queryBuilder->expr()->eq('page_id', $queryBuilder->createNamedParameter($row['page_id'], \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->eq('language_id', $queryBuilder->createNamedParameter($row['language_id'], \PDO::PARAM_INT)),
+                        $queryBuilder->expr()->orX(
+                            $queryBuilder->expr()->eq('expire', 0),
+                            $queryBuilder->expr()->lt('expire', $queryBuilder->createNamedParameter($row['expire'], \PDO::PARAM_INT))
+                        )
+                    )
+                    ->orderBy('expire')
+                    ->setMaxResults(1)
+                    ->execute()
+                    ->fetch();
                 $this->pObj->devLog('pagePathToId searched for new entry', $newEntry);
 
                 // Redirect to new path immediately if it is found
@@ -889,39 +960,59 @@ class UriGeneratorAndResolver implements SingletonInterface
      */
     protected function fetchPagesForPath($url)
     {
-        $pages = array();
+        $pagesOverlays = [];
         $language = intval($this->pObj->getDetectedLanguage());
         if ($language > 0) {
-            /** @noinspection PhpUndefinedMethodInspection */
-            $pagesOverlay = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('t1.pid',
-                'pages_language_overlay t1, pages t2',
-                't1.hidden=0 AND t1.deleted=0 AND ' .
-                't2.hidden=0 AND t2.deleted=0 AND ' .
-                't1.pid=t2.uid AND ' .
-                't2.tx_realurl_pathoverride=1 AND ' .
-                't1.sys_language_uid=' . $language . ' AND ' .
-                't1.tx_realurl_pathsegment=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($url, 'pages_language_overlay'),
-                '', '', '', 'pid'
-            );
-            if (count($pagesOverlay) > 0) {
-                /** @noinspection PhpUndefinedMethodInspection */
-                $pages = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('uid,pid', 'pages',
-                    'hidden=0 AND deleted=0 AND uid IN (' . implode(',', array_keys($pagesOverlay)) . ')',
-                    '', '', '', 'uid');
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('pages_language_overlay');
+            $queryBuilder->getRestrictions()->removeAll();
+            $pagesOverlayParentIds = $queryBuilder
+                ->select('pages_language_overlay.pid')
+                ->from('pages_language_overlay')
+                ->join(
+                    'pages_language_overlay',
+                    'pages',
+                    'pages',
+                    $queryBuilder->expr()->eq('pages_language_overlay.pid', $queryBuilder->quoteIdentifier('pages.uid'))
+                )
+                ->where(
+                    $queryBuilder->expr()->eq('pages_language_overlay.hidden', 0),
+                    $queryBuilder->expr()->eq('pages_language_overlay.deleted', 0),
+                    $queryBuilder->expr()->eq('pages.hidden', 0),
+                    $queryBuilder->expr()->eq('pages.deleted', 0),
+                    $queryBuilder->expr()->eq('pages.tx_realurl_pathoverride', 1),
+                    $queryBuilder->expr()->eq('pages_language_overlay.sys_language_uid', $queryBuilder->createNamedParameter($language, \PDO::PARAM_INT)),
+                    $queryBuilder->expr()->eq('pages_language_overlay.tx_realurl_pathsegment', $queryBuilder->createNamedParameter($url))
+                )
+                ->execute()
+                ->fetchAll();
+
+            if (count($pagesOverlayParentIds) > 0) {
+                foreach ($pagesOverlayParentIds as $pagesOverlayParentId) {
+                    $pagesOverlays[] = (int)$pagesOverlayParentId['pid'];
+                }
             }
         }
-        // $pages has strings as keys. Therefore array_merge will ensure uniqueness.
-        // Selection from 'pages' table will override selection from
-        // pages_language_overlay.
-        /** @noinspection PhpUndefinedMethodInspection */
-        $pages2 = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('uid,pid', 'pages',
-            'hidden=0 AND deleted=0 AND tx_realurl_pathoverride=1 AND tx_realurl_pathsegment=' .
-                $GLOBALS['TYPO3_DB']->fullQuoteStr($url, 'pages'),
-                '', '', '', 'uid');
-        if (count($pages2)) {
-            $pages = $pages + $pages2;
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages');
+        $queryBuilder
+            ->getRestrictions()
+            ->removeAll()
+            ->add(GeneralUtility::makeInstance(HiddenRestriction::class))
+            ->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+        $queryBuilder
+            ->select('uid', 'pid')
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('tx_realurl_pathsegment', $queryBuilder->createNamedParameter($url))
+            );
+
+        if (count($pagesOverlays)) {
+            $queryBuilder->orWhere(
+                $queryBuilder->expr()->in('uid', $queryBuilder->createNamedParameter($pagesOverlays, Connection::PARAM_INT_ARRAY))
+            );
         }
-        return $pages;
+        return $queryBuilder->execute()->fetchAll();
     }
 
     /**
@@ -1026,9 +1117,10 @@ class UriGeneratorAndResolver implements SingletonInterface
     {
 
         // List of "pages" fields to traverse for a "directory title" in the speaking URL (only from RootLine!!)
-        $segTitleFieldList = $this->conf['segTitleFieldList'] ? $this->conf['segTitleFieldList'] : TX_REALURL_SEGTITLEFIELDLIST_DEFAULT;
-        $selList = GeneralUtility::uniqueList('uid,pid,doktype,mount_pid,mount_pid_ol,tx_realurl_exclude,' . $segTitleFieldList);
-        $segTitleFieldArray = GeneralUtility::trimExplode(',', $segTitleFieldList, 1);
+        $segTitleFieldList = $this->conf['segTitleFieldList'] ?: TX_REALURL_SEGTITLEFIELDLIST_DEFAULT;
+        $segTitleFieldArray = GeneralUtility::trimExplode(',', $segTitleFieldList, true);
+        $selects = array_merge(['uid', 'pid', 'doktype', 'mount_pid', 'mount_pid_ol', 'tx_realurl_exclude'], $segTitleFieldArray);
+        $selects = array_unique($selects);
 
         // page select object - used to analyse mount points.
         $sys_page = GeneralUtility::makeInstance('TYPO3\\CMS\\Frontend\\Page\\PageRepository');
@@ -1040,24 +1132,38 @@ class UriGeneratorAndResolver implements SingletonInterface
         $titles = array(); // array(title => uid);
         $exclude = array();
         $uidTrack = array();
-        /** @noinspection PhpUndefinedMethodInspection */
-        $result = $GLOBALS['TYPO3_DB']->exec_SELECTquery($selList, 'pages',
-                        'pid=' . intval($searchPid) .
-                        ' AND deleted=0 AND doktype<>255', '', 'sorting');
-        /** @noinspection PhpUndefinedMethodInspection */
-        while (false != ($row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($result))) {
+
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages');
+        $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+
+        $result = $queryBuilder
+            ->select($selects)
+            ->from('pages')
+            ->where(
+                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($searchPid, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->neq('doktype', 255)
+            )
+            ->orderBy('sorting')
+            ->execute();
+        while (false != ($row = $result->fetch())) {
             // Mount points
             $mount_info = $sys_page->getMountPointInfo($row['uid'], $row);
             if (is_array($mount_info)) {
                 // There is a valid mount point.
                 if ($mount_info['overlay']) {
                     // Overlay mode: Substitute WHOLE record
-                    /** @noinspection PhpUndefinedMethodInspection */
-                    $result2 = $GLOBALS['TYPO3_DB']->exec_SELECTquery($selList, 'pages',
-                                    'uid=' . intval($mount_info['mount_pid']) .
-                                    ' AND deleted=0 AND doktype<>255');
-                    /** @noinspection PhpUndefinedMethodInspection */
-                    $mp_row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($result2);
+                    $queryBuilderMountPoints = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages');
+                    $queryBuilderMountPoints->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+
+                    $mp_row = $queryBuilderMountPoints
+                        ->select($selects)
+                        ->from('pages')
+                        ->where(
+                            $queryBuilderMountPoints->expr()->eq('uid', $queryBuilderMountPoints->createNamedParameter($mount_info['mount_pid'], \PDO::PARAM_INT)),
+                            $queryBuilderMountPoints->expr()->neq('doktype', 255)
+                        )
+                        ->execute()
+                        ->fetch();
                     if (is_array($mp_row)) {
                         $row = $mp_row;
                     } else {
@@ -1086,22 +1192,28 @@ class UriGeneratorAndResolver implements SingletonInterface
                 }
             }
         }
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->sql_free_result($result);
-
         // We have to search the language overlay too, if: a) the language isn't the default (0), b) if it's not set (-1)
         $uidTrackKeys = array_keys($uidTrack);
         $language = $this->pObj->getDetectedLanguage();
         if ($language != 0) {
+            $overlaidFields = GeneralUtility::trimExplode(',', TX_REALURL_SEGTITLEFIELDLIST_PLO, true);
             foreach ($uidTrackKeys as $l_id) {
-                /** @noinspection PhpUndefinedMethodInspection */
-                $result = $GLOBALS['TYPO3_DB']->exec_SELECTquery(TX_REALURL_SEGTITLEFIELDLIST_PLO,
-                    'pages_language_overlay',
-                    'pid=' . intval($l_id) . ' AND deleted=0' .
-                    ($language > 0 ? ' AND sys_language_uid=' . $language : '')
-                );
-                /** @noinspection PhpUndefinedMethodInspection */
-                while (false != ($row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($result))) {
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages_language_overlay');
+                $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
+
+                $queryBuilder
+                    ->select($overlaidFields)
+                    ->from('pages_language_overlay')
+                    ->where(
+                        $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($l_id, \PDO::PARAM_INT))
+                    );
+                if ($language > 0) {
+                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter($language, \PDO::PARAM_INT))
+                    );
+                }
+                $result = $queryBuilder->execute();
+                while (false != ($row = $result->fetch())) {
                     foreach ($segTitleFieldArray as $fieldName) {
                         if ($row[$fieldName]) {
                             $encodedTitle = $this->encodeTitle($row[$fieldName]);
@@ -1111,8 +1223,6 @@ class UriGeneratorAndResolver implements SingletonInterface
                         }
                     }
                 }
-                /** @noinspection PhpUndefinedMethodInspection */
-                $GLOBALS['TYPO3_DB']->sql_free_result($result);
             }
         }
 
@@ -1197,18 +1307,13 @@ class UriGeneratorAndResolver implements SingletonInterface
     }
 
     /**
-     * Makes expiration timestamp for SQL queries
+     * Makes expiration timestamp for SQL queries (rounding to next day, as we cannot use UNIX_TIMESTAMP())
      *
      * @param int $offsetFromNow Offset to expiration
      * @return int Expiration time stamp
      */
     protected function makeExpirationTime($offsetFromNow = 0)
     {
-        if (!\TYPO3\CMS\Core\Utility\ExtensionManagementUtility::isLoaded('adodb') && (TYPO3_db_host == '127.0.0.1' || TYPO3_db_host == 'localhost')) {
-            // Same host, same time, optimize
-            return $offsetFromNow ? '(UNIX_TIMESTAMP()+(' . $offsetFromNow . '))' : 'UNIX_TIMESTAMP()';
-        }
-        // External database or non-mysql -> round to next day
         $date = getdate(time() + $offsetFromNow);
         return mktime(0, 0, 0, $date['mon'], $date['mday'], $date['year']);
     }

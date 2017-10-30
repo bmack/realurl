@@ -28,7 +28,10 @@ namespace Tx\Realurl\Hooks\DataHandling;
 ***************************************************************/
 
 use Tx\Realurl\Configuration\ConfigurationGenerator;
+use TYPO3\CMS\Core\Database\Connection;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\SingletonInterface;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * TCEmain hook to update various caches when data is modified in TYPO3 Backend
@@ -90,12 +93,21 @@ class DataHandlerHook implements SingletonInterface
      */
     protected function clearOtherCaches($pageId)
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_urldecodecache',
-            'page_id=' . intval($pageId));
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_urlencodecache',
-            'page_id=' . intval($pageId));
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $connectionPool
+            ->getConnectionForTable('tx_realurl_urldecodecache')
+            ->delete(
+                'tx_realurl_urldecodecache',
+                ['page_id' => (int)$pageId],
+                [Connection::PARAM_INT]
+            );
+        $connectionPool
+            ->getConnectionForTable('tx_realurl_urlencodecache')
+            ->delete(
+                'tx_realurl_urlencodecache',
+                ['page_id' => (int)$pageId],
+                [Connection::PARAM_INT]
+            );
     }
 
     /**
@@ -106,9 +118,13 @@ class DataHandlerHook implements SingletonInterface
      */
     protected function clearPathCache($pageId)
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_pathcache',
-            'page_id=' . intval($pageId));
+        GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getConnectionForTable('tx_realurl_pathcache')
+            ->delete(
+                'tx_realurl_pathcache',
+                ['page_id' => (int)$pageId],
+                [Connection::PARAM_INT]
+            );
     }
 
     /**
@@ -122,10 +138,20 @@ class DataHandlerHook implements SingletonInterface
     protected function clearUniqueAlias($command, $tableName, $recordId)
     {
         if ($command === 'delete') {
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_uniqalias',
-                'tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($tableName, 'tx_realurl_uniqalias') .
-                ' AND value_id=' . intval($recordId));
+            GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getConnectionForTable('tx_realurl_uniqalias')
+                ->delete(
+                    'tx_realurl_pathcache',
+                    [
+                        'tablename' => $tableName,
+                        'value_id' => (int)$recordId
+                    ],
+                    [
+                        Connection::PARAM_INT,
+                        Connection::PARAM_STR,
+                    ]
+
+                );
         }
     }
 
@@ -140,14 +166,19 @@ class DataHandlerHook implements SingletonInterface
     {
         $expirationTime = $this->getExpirationTime();
         $pageIds = $this->getChildPages($pageId);
-        $pageIds[] = intval($pageId);
+        $pageIds[] = (int)$pageId;
 
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache',
-            'page_id IN (' . implode(',', $pageIds) . ') AND language_id=' . intval($languageId) . ' AND expire=0',
-            array(
-                'expire' => $expirationTime
-            ));
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_realurl_pathcache');
+        $queryBuilder
+            ->update('tx_realurl_pathcache')
+            ->where(
+                $queryBuilder->expr()->in('page_id', $queryBuilder->createNamedParameter($pageIds, Connection::PARAM_INT_ARRAY)),
+                $queryBuilder->expr()->eq('language_id', $queryBuilder->createNamedParameter($languageId, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->eq('expire', 0)
+            )
+            ->set('expire', $expirationTime)
+            ->execute();
     }
 
     /**
@@ -160,14 +191,18 @@ class DataHandlerHook implements SingletonInterface
     {
         $expirationTime = $this->getExpirationTime();
         $pageIds = $this->getChildPages($pageId);
-        $pageIds[] = intval($pageId);
+        $pageIds[] = (int)$pageId;
 
-        /** @noinspection PhpUndefinedMethodInspection */
-        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache',
-            'page_id IN (' . implode(',', $pageIds) . ') AND expire=0',
-            array(
-                'expire' => $expirationTime
-            ));
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('tx_realurl_pathcache');
+        $queryBuilder
+            ->update('tx_realurl_pathcache')
+            ->where(
+                $queryBuilder->expr()->in('page_id', $queryBuilder->createNamedParameter($pageIds, Connection::PARAM_INT_ARRAY)),
+                $queryBuilder->expr()->eq('expire', 0)
+            )
+            ->set('expire', $expirationTime)
+            ->execute();
     }
 
     /**
@@ -277,9 +312,17 @@ class DataHandlerHook implements SingletonInterface
      */
     protected static function getInfoFromOverlayPid($pid)
     {
-        /** @noinspection PhpUndefinedMethodInspection */
-        list($rec) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('pid,sys_language_uid',
-            'pages_language_overlay', 'uid=' . intval($pid));
+        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+            ->getQueryBuilderForTable('pages_language_overlay');
+        $queryBuilder->getRestrictions()->removeAll();
+        $rec = $queryBuilder
+            ->select('pid', 'sys_language_uid')
+            ->from('pages_language_overlay')
+            ->where(
+                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
+            )
+            ->execute()
+            ->fetch();
         return array($rec['pid'], $rec['sys_language_uid']);
     }
 
@@ -300,8 +343,9 @@ class DataHandlerHook implements SingletonInterface
     public function flushCacheTables(array $arguments)
     {
         if (isset($arguments['cacheCmd'])) {
-            $GLOBALS['TYPO3_DB']->exec_TRUNCATEquery('tx_realurl_urlencodecache');
-            $GLOBALS['TYPO3_DB']->exec_TRUNCATEquery('tx_realurl_urldecodecache');
+            $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+            $connectionPool->getConnectionForTable('tx_realurl_urlencodecache')->truncate('tx_realurl_urlencodecache');
+            $connectionPool->getConnectionForTable('tx_realurl_urldecodecache')->truncate('tx_realurl_urldecodecache');
         }
     }
 
@@ -348,14 +392,32 @@ class DataHandlerHook implements SingletonInterface
     {
         $pageIdArray = $params['table'] === 'pages' ? array($params['uid']) : $params['pageIdArray'];
         if (is_array($pageIdArray) && count($pageIdArray) > 0) {
-            /** @noinspection PhpUndefinedMethodInspection */
-            $pageIdList = implode(',', $GLOBALS['TYPO3_DB']->cleanIntArray($pageIdArray));
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_urlencodecache', 'page_id IN (' . $pageIdList . ')');
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_urldecodecache', 'page_id IN (' . $pageIdList . ')');
-            /** @noinspection PhpUndefinedMethodInspection */
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_pathcache', 'page_id IN (' . $pageIdList . ') AND expire>0 AND expire<=' . time());
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tx_realurl_urlencodecache');
+            $queryBuilder
+                ->delete('tx_realurl_urlencodecache')
+                ->where(
+                    $queryBuilder->expr()->in('page_id', $queryBuilder->createNamedParameter($pageIdArray, Connection::PARAM_INT_ARRAY))
+                )
+                ->execute();
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tx_realurl_urldecodecache');
+            $queryBuilder
+                ->delete('tx_realurl_urldecodecache')
+                ->where(
+                    $queryBuilder->expr()->in('page_id', $queryBuilder->createNamedParameter($pageIdArray, Connection::PARAM_INT_ARRAY))
+                )
+                ->execute();
+            $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
+                ->getQueryBuilderForTable('tx_realurl_pathcache');
+            $queryBuilder
+                ->delete('tx_realurl_pathcache')
+                ->where(
+                    $queryBuilder->expr()->in('page_id', $queryBuilder->createNamedParameter($pageIdArray, Connection::PARAM_INT_ARRAY)),
+                    $queryBuilder->expr()->gt('expire', 0),
+                    $queryBuilder->expr()->lte('expire', time())
+                )
+                ->execute();
         }
     }
 
