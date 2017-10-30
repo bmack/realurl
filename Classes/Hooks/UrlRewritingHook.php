@@ -2383,6 +2383,7 @@ class UrlRewritingHook implements SingletonInterface
                 ->select('uid')
                 ->from('pages')
                 ->where(
+                    $queryBuilder->expr()->eq('sys_language_uid', 0),
                     $queryBuilder->expr()->eq('alias', $queryBuilder->createNamedParameter('alias', $alias))
                 )
                 ->execute()
@@ -2917,6 +2918,7 @@ class UrlRewritingHook implements SingletonInterface
         $pageRecord = $queryBuilder->select('tx_realurl_nocache')
             ->from('pages')
             ->where(
+                $queryBuilder->expr()->eq('sys_language_uid', 0),
                 $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
             )
             ->execute()

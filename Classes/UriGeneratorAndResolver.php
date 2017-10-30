@@ -403,6 +403,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             ->select('*')
             ->from('pages')
             ->where(
+                $queryBuilder->expr()->eq('sys_language_uid', 0),
                 $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pageId, \PDO::PARAM_INT))
             )
             ->execute()
@@ -726,6 +727,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                      )
                     ->where(
                         $queryBuilder->expr()->eq('pages.deleted', 0),
+                        $queryBuilder->expr()->eq('pages.sys_language_uid', 0),
                         $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($this->conf['rootpage_id'], \PDO::PARAM_INT)),
                         $queryBuilder->expr()->eq('pagepath', $queryBuilder->createNamedParameter(implode('/', $copy_pathParts)))
                     )
@@ -968,25 +970,25 @@ class UriGeneratorAndResolver implements SingletonInterface
         $language = intval($this->pObj->getDetectedLanguage());
         if ($language > 0) {
             $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-                ->getQueryBuilderForTable('pages_language_overlay');
+                ->getQueryBuilderForTable('pages');
             $queryBuilder->getRestrictions()->removeAll();
             $pagesOverlayParentIds = $queryBuilder
-                ->select('pages_language_overlay.pid')
-                ->from('pages_language_overlay')
+                ->select('pagetranslation.l10n_parent AS pid')
+                ->from('pages')
                 ->join(
-                    'pages_language_overlay',
+                    'pagetranslation',
                     'pages',
                     'pages',
-                    $queryBuilder->expr()->eq('pages_language_overlay.pid', $queryBuilder->quoteIdentifier('pages.uid'))
+                    $queryBuilder->expr()->eq('pagetranslation.l10n_parent', $queryBuilder->quoteIdentifier('pages.uid'))
                 )
                 ->where(
-                    $queryBuilder->expr()->eq('pages_language_overlay.hidden', 0),
-                    $queryBuilder->expr()->eq('pages_language_overlay.deleted', 0),
+                    $queryBuilder->expr()->eq('pagetranslation.hidden', 0),
+                    $queryBuilder->expr()->eq('pagetranslation.deleted', 0),
                     $queryBuilder->expr()->eq('pages.hidden', 0),
                     $queryBuilder->expr()->eq('pages.deleted', 0),
                     $queryBuilder->expr()->eq('pages.tx_realurl_pathoverride', 1),
-                    $queryBuilder->expr()->eq('pages_language_overlay.sys_language_uid', $queryBuilder->createNamedParameter($language, \PDO::PARAM_INT)),
-                    $queryBuilder->expr()->eq('pages_language_overlay.tx_realurl_pathsegment', $queryBuilder->createNamedParameter($url))
+                    $queryBuilder->expr()->eq('pagetranslation.sys_language_uid', $queryBuilder->createNamedParameter($language, \PDO::PARAM_INT)),
+                    $queryBuilder->expr()->eq('pagetranslation.tx_realurl_pathsegment', $queryBuilder->createNamedParameter($url))
                 )
                 ->execute()
                 ->fetchAll();
@@ -1008,6 +1010,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             ->select('uid', 'pid')
             ->from('pages')
             ->where(
+                $queryBuilder->expr()->eq('sys_language_uid', 0),
                 $queryBuilder->expr()->eq('tx_realurl_pathsegment', $queryBuilder->createNamedParameter($url))
             );
 
@@ -1145,6 +1148,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             ->from('pages')
             ->where(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($searchPid, \PDO::PARAM_INT)),
+                $queryBuilder->expr()->eq('sys_language_uid', 0),
                 $queryBuilder->expr()->neq('doktype', 255)
             )
             ->orderBy('sorting')
@@ -1164,6 +1168,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                         ->from('pages')
                         ->where(
                             $queryBuilderMountPoints->expr()->eq('uid', $queryBuilderMountPoints->createNamedParameter($mount_info['mount_pid'], \PDO::PARAM_INT)),
+                            $queryBuilderMountPoints->expr()->eq('sys_language_uid', 0),
                             $queryBuilderMountPoints->expr()->neq('doktype', 255)
                         )
                         ->execute()

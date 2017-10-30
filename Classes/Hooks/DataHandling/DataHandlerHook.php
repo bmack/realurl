@@ -71,17 +71,15 @@ class DataHandlerHook implements SingletonInterface
      */
     protected function clearCaches($command, $tableName, $recordId)
     {
-        if ($this->isTableForCache($tableName)) {
-            if ($command === 'delete' || $command === 'move') {
-                list($pageId, ) = $this->getPageData($tableName, $recordId);
-                $this->fetchRealURLConfiguration($pageId);
-                if ($command === 'delete') {
-                    $this->clearPathCache($pageId);
-                } else {
-                    $this->expirePathCacheForAllLanguages($pageId);
-                }
-                $this->clearOtherCaches($pageId);
+        if ($tableName === 'pages' && ($command === 'delete' || $command === 'move')) {
+            list($pageId, ) = $this->getInfoFromOverlayPid($recordId);
+            $this->fetchRealURLConfiguration($pageId);
+            if ($command === 'delete') {
+                $this->clearPathCache($pageId);
+            } else {
+                $this->expirePathCacheForAllLanguages($pageId);
             }
+            $this->clearOtherCaches($pageId);
         }
     }
 
@@ -267,23 +265,6 @@ class DataHandlerHook implements SingletonInterface
     }
 
     /**
-     * Obtains real page id and language from the table name and passed id of the record in the table.
-     *
-     * @param $tableName
-     * @param $id
-     * @return array First member is page id, second is language
-     */
-    protected static function getPageData($tableName, $id)
-    {
-        if ($tableName === 'pages_language_overlay') {
-            $result = self::getInfoFromOverlayPid($id);
-        } else {
-            $result = array($id, 0);
-        }
-        return $result;
-    }
-
-    /**
      * Retrieves field list to check for modification
      *
      * @param string $tableName
@@ -310,31 +291,24 @@ class DataHandlerHook implements SingletonInterface
      * @param	int		$pid	Page id
      * @return	array		Array with two members: real page uid and sys_language_uid
      */
-    protected static function getInfoFromOverlayPid($pid)
+    protected function getInfoFromOverlayPid($pid)
     {
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('pages_language_overlay');
+            ->getQueryBuilderForTable('pages');
         $queryBuilder->getRestrictions()->removeAll();
         $rec = $queryBuilder
-            ->select('pid', 'sys_language_uid')
-            ->from('pages_language_overlay')
+            ->select('l10n_parent', 'sys_language_uid')
+            ->from('pages')
             ->where(
-                $queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
+                $queryBuilder->expr()->eq('l10n_parent', $queryBuilder->createNamedParameter($pid, \PDO::PARAM_INT))
             )
             ->execute()
             ->fetch();
-        return array($rec['pid'], $rec['sys_language_uid']);
-    }
-
-    /**
-     * Checks if the update table can affect cache entries
-     *
-     * @param string $tableName
-     * @return bool
-     */
-    protected static function isTableForCache($tableName)
-    {
-        return ($tableName === 'pages' || $tableName === 'pages_language_overlay');
+        if (is_array($rec)) {
+            return array($rec['l10n_parent'], $rec['sys_language_uid']);
+        } else {
+            return [$pid, 0];
+        }
     }
 
     /**
@@ -438,7 +412,11 @@ class DataHandlerHook implements SingletonInterface
             if (!\TYPO3\CMS\Core\Utility\MathUtility::canBeInterpretedAsInteger($recordId)) {
                 $recordId = intval($dataHandler->substNEWwithIDs[$recordId]);
             }
-            list($pageId, $languageId) = static::getPageData($tableName, $recordId);
+            if ($tableName !== 'pages') {
+                list($pageId, $languageId) = $dataHandler->recordInfo($tableName, $recordId, 'pid, sys_language_uid');
+            } else {
+                list($pageId, $languageId) = $this->getInfoFromOverlayPid($recordId);
+            }
             $this->fetchRealURLConfiguration($pageId);
             if ($this->shouldFixCaches($tableName, $databaseData)) {
                 if (isset($databaseData['alias'])) {
@@ -462,7 +440,7 @@ class DataHandlerHook implements SingletonInterface
     protected function shouldFixCaches($tableName, array $databaseData)
     {
         $result = false;
-        if (self::isTableForCache($tableName)) {
+        if ($tableName === 'pages') {
             $interestingFields = $this->getFieldList($tableName);
             $result = count(array_intersect($interestingFields, array_keys($databaseData))) > 0;
         }
