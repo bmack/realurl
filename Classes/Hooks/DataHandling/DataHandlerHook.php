@@ -139,7 +139,7 @@ class DataHandlerHook implements SingletonInterface
             GeneralUtility::makeInstance(ConnectionPool::class)
                 ->getConnectionForTable('tx_realurl_uniqalias')
                 ->delete(
-                    'tx_realurl_pathcache',
+                    'tx_realurl_uniqalias',
                     [
                         'tablename' => $tableName,
                         'value_id' => (int)$recordId
