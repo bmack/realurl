@@ -203,7 +203,7 @@ class UriGeneratorAndResolver implements SingletonInterface
      * Resolves shortcuts if necessary and returns the final destination page id.
      *
      * @param int $pageId
-     * @param array $mpvar
+     * @param string $mpvar
      * @return mixed false if not found or int
      */
     protected function resolveShortcuts($pageId, &$mpvar)
@@ -1144,7 +1144,7 @@ class UriGeneratorAndResolver implements SingletonInterface
         $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
 
         $result = $queryBuilder
-            ->select($selects)
+            ->select(...$selects)
             ->from('pages')
             ->where(
                 $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($searchPid, \PDO::PARAM_INT)),
