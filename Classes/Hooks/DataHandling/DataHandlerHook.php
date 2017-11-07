@@ -267,22 +267,12 @@ class DataHandlerHook implements SingletonInterface
     /**
      * Retrieves field list to check for modification
      *
-     * @param string $tableName
      * @return	array
      */
-    protected function getFieldList($tableName)
+    protected function getFieldList()
     {
-        if ($tableName === 'pages_language_overlay') {
-            $fieldList = TX_REALURL_SEGTITLEFIELDLIST_PLO;
-        } else {
-            if (isset($this->config['pagePath']['segTitleFieldList'])) {
-                $fieldList = $this->config['pagePath']['segTitleFieldList'];
-            } else {
-                $fieldList = TX_REALURL_SEGTITLEFIELDLIST_DEFAULT;
-            }
-        }
-        $fieldList .= ',hidden';
-        return array_unique(\TYPO3\CMS\Core\Utility\GeneralUtility::trimExplode(',', $fieldList, true));
+        $fieldList = $this->config['pagePath']['segTitleFieldList'] ?? TX_REALURL_SEGTITLEFIELDLIST_DEFAULT;
+        return array_unique(\TYPO3\CMS\Core\Utility\GeneralUtility::trimExplode(',', $fieldList . ',hidden', true));
     }
 
     /**
@@ -414,12 +404,13 @@ class DataHandlerHook implements SingletonInterface
             }
             if ($tableName !== 'pages') {
                 list($pageId) = $dataHandler->recordInfo($tableName, $recordId, 'pid');
-                list($pageId, $languageId) = $this->getInfoFromOverlayPid($pageId);
+                // all data is stored on default language page record
+                $languageId = 0;
             } else {
                 list($pageId, $languageId) = $this->getInfoFromOverlayPid($recordId);
             }
             $this->fetchRealURLConfiguration($pageId);
-            if ($this->shouldFixCaches($tableName, $databaseData)) {
+            if ($tableName === 'pages' && $this->shouldFixCaches($databaseData)) {
                 if (isset($databaseData['alias'])) {
                     $this->expirePathCacheForAllLanguages($pageId);
                 } else {
@@ -434,17 +425,12 @@ class DataHandlerHook implements SingletonInterface
     /**
      * Checks if we need to fix caches
      *
-     * @param string $tableName
      * @param array $databaseData
      * @return bool
      */
-    protected function shouldFixCaches($tableName, array $databaseData)
+    protected function shouldFixCaches(array $databaseData)
     {
-        $result = false;
-        if ($tableName === 'pages') {
-            $interestingFields = $this->getFieldList($tableName);
-            $result = count(array_intersect($interestingFields, array_keys($databaseData))) > 0;
-        }
-        return $result;
+        $interestingFields = $this->getFieldList();
+        return count(array_intersect($interestingFields, array_keys($databaseData))) > 0;
     }
 }
