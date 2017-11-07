@@ -413,7 +413,8 @@ class DataHandlerHook implements SingletonInterface
                 $recordId = intval($dataHandler->substNEWwithIDs[$recordId]);
             }
             if ($tableName !== 'pages') {
-                list($pageId, $languageId) = $dataHandler->recordInfo($tableName, $recordId, 'pid, sys_language_uid');
+                list($pageId) = $dataHandler->recordInfo($tableName, $recordId, 'pid');
+                list($pageId, $languageId) = $this->getInfoFromOverlayPid($pageId);
             } else {
                 list($pageId, $languageId) = $this->getInfoFromOverlayPid($recordId);
             }
