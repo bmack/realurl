@@ -667,7 +667,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                 // Building up the path from page title etc.
                 if (!$page['tx_realurl_exclude'] || count($rl) == 0) {
                     // List of "pages" fields to traverse for a "directory title" in the speaking URL (only from RootLine!!)
-                    $segTitleFieldArray = GeneralUtility::trimExplode(',', $this->conf['segTitleFieldList'] ? $this->conf['segTitleFieldList'] : TX_REALURL_SEGTITLEFIELDLIST_DEFAULT, 1);
+                    $segTitleFieldArray = GeneralUtility::trimExplode(',', $this->conf['segTitleFieldList'] ?: TX_REALURL_SEGTITLEFIELDLIST_DEFAULT, true);
                     $theTitle = '';
                     foreach ($segTitleFieldArray as $fieldName) {
                         if (isset($page[$fieldName]) && $page[$fieldName] !== '') {
@@ -708,9 +708,8 @@ class UriGeneratorAndResolver implements SingletonInterface
             // Work from outside-in to look up path in cache
             $postVar = false;
             $copy_pathParts = $pathParts;
-            $charset = $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] ? $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] : $GLOBALS['TSFE']->defaultCharSet;
             foreach ($copy_pathParts as $key => $value) {
-                $copy_pathParts[$key] = mb_strtolower($value, $charset ?: 'utf-8');
+                $copy_pathParts[$key] = mb_strtolower($value, 'utf-8');
             }
             while (count($copy_pathParts)) {
                 // Using pathq1 index!
@@ -974,7 +973,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             $queryBuilder->getRestrictions()->removeAll();
             $pagesOverlayParentIds = $queryBuilder
                 ->select('pagetranslation.l10n_parent AS pid')
-                ->from('pages')
+                ->from('pages', 'pagetranslation')
                 ->join(
                     'pagetranslation',
                     'pages',
@@ -1207,20 +1206,16 @@ class UriGeneratorAndResolver implements SingletonInterface
         if ($language != 0) {
             $overlaidFields = GeneralUtility::trimExplode(',', TX_REALURL_SEGTITLEFIELDLIST_PLO, true);
             foreach ($uidTrackKeys as $l_id) {
-                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages_language_overlay');
+                $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages');
                 $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
 
                 $queryBuilder
-                    ->select($overlaidFields)
-                    ->from('pages_language_overlay')
+                    ->select(...$overlaidFields)
+                    ->from('pages')
                     ->where(
-                        $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($l_id, \PDO::PARAM_INT))
-                    );
-                if ($language > 0) {
-                    $queryBuilder->andWhere(
+                        $queryBuilder->expr()->eq('l10n_parent', $queryBuilder->createNamedParameter($l_id, \PDO::PARAM_INT)),
                         $queryBuilder->expr()->eq('sys_language_uid', $queryBuilder->createNamedParameter($language, \PDO::PARAM_INT))
                     );
-                }
                 $result = $queryBuilder->execute();
                 while (false != ($row = $result->fetch())) {
                     foreach ($segTitleFieldArray as $fieldName) {
@@ -1278,22 +1273,19 @@ class UriGeneratorAndResolver implements SingletonInterface
      */
     public function encodeTitle($title)
     {
-        // Fetch character set
-        $charset = $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] ? $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] : $GLOBALS['TSFE']->defaultCharSet;
-
         // Convert to lowercase
-        $processedTitle = mb_strtolower($title, $charset ?: 'utf-8');
+        $processedTitle = mb_strtolower($title, 'utf-8');
 
         // Strip tags
         $processedTitle = strip_tags($processedTitle);
 
         // Convert some special tokens to the space character
-        $space = isset($this->conf['spaceCharacter']) ? $this->conf['spaceCharacter'] : '_';
+        $space = $this->conf['spaceCharacter'] ?? '_';
         $processedTitle = preg_replace('/[ \-+_]+/', $space, $processedTitle); // convert spaces
 
         // Convert extended letters to ascii equivalents
         $charsetConverter = GeneralUtility::makeInstance(CharsetConverter::class);
-        $processedTitle = $charsetConverter->specCharsToASCII($charset, $processedTitle);
+        $processedTitle = $charsetConverter->specCharsToASCII('utf-8', $processedTitle);
 
         // Strip the rest
         if ($this->extConf['init']['enableAllUnicodeLetters']) {

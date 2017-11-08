@@ -2198,12 +2198,11 @@ class UrlRewritingHook implements SingletonInterface
     {
 
         // Fetch character set
-        $charset = $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] ? $GLOBALS['TYPO3_CONF_VARS']['BE']['forceCharset'] : $GLOBALS['TSFE']->defaultCharSet;
         $processedTitle = $newAliasValue;
 
         // Convert to lowercase
         if ($cfg['useUniqueCache_conf']['strtolower']) {
-            $processedTitle = mb_strtolower($processedTitle, $charset ?: 'utf-8');
+            $processedTitle = mb_strtolower($processedTitle, 'utf-8');
         }
 
         $processedTitle = strip_tags($processedTitle);
@@ -2213,7 +2212,7 @@ class UrlRewritingHook implements SingletonInterface
         $processedTitle = strtr($processedTitle, ' -+_', $space . $space . $space . $space); // convert spaces
 
         // Convert extended letters to ascii equivalents
-        $processedTitle = $GLOBALS['TSFE']->csConvObj->specCharsToASCII($charset, $processedTitle);
+        $processedTitle = $GLOBALS['TSFE']->csConvObj->specCharsToASCII('utf-8', $processedTitle);
 
         // Strip the rest
         if ($this->extConf['init']['enableAllUnicodeLetters']) {
