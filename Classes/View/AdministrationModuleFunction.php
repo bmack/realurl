@@ -1843,7 +1843,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
 
         if (is_null($domainList)) {
             $domainList = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('uid,domainName',
-                'sys_domain', 'redirectTo=\'\'', '', 'domainName'
+                'sys_domain', '', '', 'domainName'
             );
         }
 

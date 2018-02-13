@@ -1117,8 +1117,7 @@ class UrlRewritingHook implements SingletonInterface
             ->select('uid')
             ->from('sys_domain')
             ->where(
-                $queryBuilder->expr()->eq('domainName', $queryBuilder->createNamedParameter(GeneralUtility::getIndpEnv('HTTP_HOST'), \PDO::PARAM_STR)),
-                $queryBuilder->expr()->neq('redirectTo', '""')
+                $queryBuilder->expr()->eq('domainName', $queryBuilder->createNamedParameter(GeneralUtility::getIndpEnv('HTTP_HOST'), \PDO::PARAM_STR))
             )
             ->execute()
             ->fetch();
@@ -2628,7 +2627,7 @@ class UrlRewritingHook implements SingletonInterface
                     ->removeAll()
                     ->add(GeneralUtility::makeInstance(HiddenRestriction::class));
                 $domain = $queryBuilder
-                    ->select('pid', 'redirectTo', 'domainName')
+                    ->select('pid', 'domainName')
                     ->from('sys_domain')
                     ->where(
                         $queryBuilder->expr()->eq('domainName', $queryBuilder->createNamedParameter($host))
@@ -2636,22 +2635,9 @@ class UrlRewritingHook implements SingletonInterface
                     ->execute()
                     ->fetchAll();
                 if (count($domain) > 0) {
-                    if (!$domain[0]['redirectTo']) {
-                        $rootpage_id = intval($domain[0]['pid']);
-                        $this->devLog('Found rootpage_id by domain lookup', array('domain' => $domain[0]['domainName'], 'rootpage_id' => $rootpage_id));
-                        break;
-                    } else {
-                        $parts = @parse_url($domain[0]['redirectTo']);
-                        $host = $parts['host'];
-                        if (isset($testedDomains[$host])) {
-                            // Redirect loop
-                            /** @noinspection PhpUndefinedMethodInspection */
-                            $GLOBALS['TSFE']->pageUnavailableAndExit('TYPO3 RealURL has detected a circular redirect in domain records. There was an attempt to redirect to ' . $host . ' from ' . $domain[0]['domainName'] . ' twice.');
-                            exit;
-                        } else {
-                            $testedDomains[$host] = 1;
-                        }
-                    }
+                    $rootpage_id = intval($domain[0]['pid']);
+                    $this->devLog('Found rootpage_id by domain lookup', array('domain' => $domain[0]['domainName'], 'rootpage_id' => $rootpage_id));
+                    break;
                 }
             } while (count($domain) > 0);
             unset($testedDomains);
@@ -2703,9 +2689,6 @@ class UrlRewritingHook implements SingletonInterface
             $result = $queryBuilder
                 ->select('pid')
                 ->from('sys_domain')
-                ->where(
-                    $queryBuilder->expr()->eq('redirectTo', '""')
-                )
                 ->groupBy('pid')
                 ->execute();
             $multidomain = ($result->rowCount() > 1);

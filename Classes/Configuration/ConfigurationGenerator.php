@@ -91,7 +91,7 @@ class ConfigurationGenerator
         // Find all domains
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('sys_domain');
         $domains = $queryBuilder
-            ->select('pid', 'domainName', 'redirectTo')
+            ->select('pid', 'domainName')
             ->from('sys_domain')
             ->execute()
             ->fetchAll();
@@ -115,18 +115,6 @@ class ConfigurationGenerator
             }
         } else {
             foreach ($domains as $domain) {
-                if ($domain['redirectTo'] != '') {
-                    // Redirects to another domain, see if we can make a shortcut
-                    $parts = parse_url($domain['redirectTo']);
-                    if (isset($domains[$parts['host']]) && ($domains['path'] == '/' || $domains['path'] == '')) {
-                        // Make a shortcut
-                        if ($conf[$parts['host']] != $domain['domainName']) {
-                            // Here if there were no redirect from this domain to source domain
-                            $conf[$domain['domainName']] = $parts['host'];
-                        }
-                        continue;
-                    }
-                }
                 // Make entry
                 $conf[$domain['domainName']] = $template;
                 $conf[$domain['domainName']]['pagePath']['rootpage_id'] = $domain['pid'];

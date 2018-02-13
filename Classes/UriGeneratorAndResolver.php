@@ -578,8 +578,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                             ->select('domainName')
                             ->from('sys_domain')
                             ->where(
-                                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($rl['uid'])),
-                                $queryBuilder->expr()->eq('redirectTo', '""')
+                                $queryBuilder->expr()->eq('pid', $queryBuilder->createNamedParameter($rl['uid']))
                             )
                             ->orderBy('sorting')
                             ->execute()
