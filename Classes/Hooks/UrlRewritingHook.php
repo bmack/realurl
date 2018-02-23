@@ -1140,7 +1140,9 @@ class UrlRewritingHook implements SingletonInterface
 
         // Convert URL to segments
         $pathParts = explode('/', $speakingURIpath);
-        array_walk($pathParts, create_function('&$value', '$value = urldecode($value);'));
+        array_walk($pathParts, function(&$value) {
+			$value = urldecode($value);
+		});
 
         // Strip/process file name or extension first
         $file_GET_VARS = $this->decodeSpURL_decodeFileName($pathParts);
