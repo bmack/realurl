@@ -2211,7 +2211,9 @@ class UrlRewritingHook implements SingletonInterface
         $processedTitle = strtr($processedTitle, ' -+_', $space . $space . $space . $space); // convert spaces
 
         // Convert extended letters to ascii equivalents
-        $processedTitle = $GLOBALS['TSFE']->csConvObj->specCharsToASCII('utf-8', $processedTitle);
+        /** @var \TYPO3\CMS\Core\Charset\CharsetConverter $csConvObj */
+        $csConvObj = GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\Charset\\CharsetConverter');
+        $processedTitle = $csConvObj->specCharsToASCII('utf-8', $processedTitle);
 
         // Strip the rest
         if ($this->extConf['init']['enableAllUnicodeLetters']) {
