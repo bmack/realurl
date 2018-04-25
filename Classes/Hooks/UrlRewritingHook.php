@@ -1921,7 +1921,7 @@ class UrlRewritingHook implements SingletonInterface
                     ->getQueryBuilderForTable($cfg['table']);
                 $queryBuilder->getRestrictions()->removeAll();
                 $queryBuilder
-                    ->select($fieldList)
+                    ->select(...$fieldList)
                     ->from($cfg['table'])
                     ->where(
                         $queryBuilder->expr()->eq($cfg['alias_field'], $queryBuilder->createNamedParameter($value))
@@ -1963,7 +1963,7 @@ class UrlRewritingHook implements SingletonInterface
                 $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
                     ->getQueryBuilderForTable($cfg['table']);
                 $queryBuilder->getRestrictions()->removeAll();
-                $queryBuilder->select($fieldList)
+                $queryBuilder->select(...$fieldList)
                     ->from($cfg['table'])
                     ->where(
                         $queryBuilder->expr()->eq($cfg['id_field'], $queryBuilder->createNamedParameter($value))
