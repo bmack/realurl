@@ -2382,7 +2382,7 @@ class UrlRewritingHook implements SingletonInterface
                 ->from('pages')
                 ->where(
                     $queryBuilder->expr()->eq('sys_language_uid', 0),
-                    $queryBuilder->expr()->eq('alias', $queryBuilder->createNamedParameter('alias', $alias))
+                    $queryBuilder->expr()->eq('alias', $queryBuilder->createNamedParameter($alias))
                 )
                 ->execute()
                 ->fetch();
