@@ -11,6 +11,7 @@ $GLOBALS['TCA']['pages']['columns'] += array(
         ),
     ),
     'tx_realurl_pathoverride' => array(
+        'l10n_mode' => 'exclude',
         'label' => 'LLL:EXT:realurl/Resources/Private/Language/locallang_db.xml:pages.tx_realurl_path_override',
         'displayCond' => 'FIELD:tx_realurl_exclude:!=:1',
         'exclude' => 1,
@@ -22,6 +23,7 @@ $GLOBALS['TCA']['pages']['columns'] += array(
         )
     ),
     'tx_realurl_exclude' => array(
+        'l10n_mode' => 'exclude',
         'label' => 'LLL:EXT:realurl/Resources/Private/Language/locallang_db.xml:pages.tx_realurl_exclude',
         'exclude' => 1,
         'config' => array(
@@ -32,6 +34,7 @@ $GLOBALS['TCA']['pages']['columns'] += array(
         )
     ),
     'tx_realurl_nocache' => array(
+        'l10n_mode' => 'exclude',
         'label' => 'LLL:EXT:realurl/Resources/Private/Language/locallang_db.xml:pages.tx_realurl_nocache',
         'exclude' => 1,
         'config' => array(
