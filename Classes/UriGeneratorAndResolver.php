@@ -29,6 +29,10 @@ namespace Tx\Realurl;
  ***************************************************************/
 
 use TYPO3\CMS\Core\Charset\CharsetConverter;
+use TYPO3\CMS\Core\Context\Context;
+use TYPO3\CMS\Core\Context\LanguageAspect;
+use TYPO3\CMS\Core\Context\UserAspect;
+use TYPO3\CMS\Core\Context\VisibilityAspect;
 use TYPO3\CMS\Core\Database\Connection;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Database\Query\QueryBuilder;
@@ -37,6 +41,7 @@ use TYPO3\CMS\Core\Database\Query\Restriction\FrontendGroupRestriction;
 use TYPO3\CMS\Core\Database\Query\Restriction\HiddenRestriction;
 use TYPO3\CMS\Core\SingletonInterface;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Utility\RootlineUtility;
 
 /**
  * Class for translating page ids to/from path strings (Speaking URLs)
@@ -47,14 +52,6 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class UriGeneratorAndResolver implements SingletonInterface
 {
-
-    /**
-     * PageRepository object for finding rootline on the fly
-     *
-     * @var	\TYPO3\CMS\Frontend\Page\PageRepository
-     */
-    protected $sysPage;
-
     /**
      * Reference to parent object
      *
@@ -459,7 +456,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                     'rootpage_id' => $rootPageId,
                     'mpvar' => $mpvar
                 );
-                $queryBuilder->insert('tx_realurl_pathcache')->values($insertArray);
+                $queryBuilder->insert('tx_realurl_pathcache')->values($insertArray)->execute();
             }
         }
     }
@@ -523,9 +520,7 @@ class UriGeneratorAndResolver implements SingletonInterface
         $result = false;
 
         // Get rootLine for current site (overlaid with any language overlay records).
-        $this->createSysPageIfNecessary();
-        $this->sysPage->sys_language_uid = $langID;
-        $rootLine = $this->sysPage->getRootLine($id, $mpvar);
+        $rootLine = $this->getRootLineForPage($id, $mpvar, $langID);
         $numberOfRootlineEntries = count($rootLine);
         $newRootLine = array();
         $rootFound = false;
@@ -944,8 +939,7 @@ class UriGeneratorAndResolver implements SingletonInterface
      */
     protected function isAnyChildOf($pid, $rootPid)
     {
-        $this->createSysPageIfNecessary();
-        $rootLine = $this->sysPage->getRootLine($pid);
+        $rootLine = $this->getRootLineForPage($pid, 0, 0);
         foreach ($rootLine as $page) {
             if ($page['uid'] == $rootPid) {
                 return true;
@@ -1401,15 +1395,27 @@ class UriGeneratorAndResolver implements SingletonInterface
     }
 
     /**
-     * Creates $this->sysPage if it does not exist yet
+     * Fetches the rootline for a page
      *
-     * @return void
+     * @param $pageId
+     * @param $mountPoint
+     * @param $languageId
+     * @return array
+     * @throws \TYPO3\CMS\Core\Context\Exception\AspectNotFoundException
      */
-    protected function createSysPageIfNecessary()
+    protected function getRootLineForPage($pageId, $mountPoint, $languageId)
     {
-        if (!is_object($this->sysPage)) {
-            $this->sysPage = GeneralUtility::makeInstance('TYPO3\\CMS\\Frontend\\Page\\PageRepository');
-            $this->sysPage->init($GLOBALS['TSFE']->showHiddenPage || $this->pObj->isBEUserLoggedIn());
-        }
+        $context = GeneralUtility::makeInstance(Context::class);
+        $context = clone $context;
+        /** @var VisibilityAspect $visibilityAspect */
+        $visibilityAspect = $context->getAspect('visibility');
+        /** @var LanguageAspect $languageAspect */
+        $languageAspect = $context->getAspect('language');
+        /** @var UserAspect $backendUserAspect */
+        $backendUserAspect = $context->getAspect('backend.user');
+        $context->setAspect('visibility', GeneralUtility::makeInstance(VisibilityAspect::class, $visibilityAspect->includeHiddenPages() || $backendUserAspect->isLoggedIn(), $visibilityAspect->includeHiddenContent(), $visibilityAspect->includeDeletedRecords()));
+        $context->setAspect('language', GeneralUtility::makeInstance(LanguageAspect::class, (int)$languageId, (int)$languageId, $languageAspect->getOverlayType()));
+
+        return GeneralUtility::makeInstance(RootlineUtility::class, $pageId, $mountPoint, $context)->get();
     }
 }

@@ -3,10 +3,9 @@
 	"type": "typo3-cms-extension",
 	"description": "RealURL: speaking paths for TYPO3",
 	"homepage": "http://typo3.org",
-	"license": "GPL-2.0+",
-
+	"license": "GPL-2.0-or-later",
 	"require": {
-		"typo3/cms-core": "^8.7 || ^9.0"
+		"typo3/cms-core": "^8.3"
 	},
 	"replace": {
 		"realurl": "self.version"
