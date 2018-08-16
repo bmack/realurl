@@ -437,7 +437,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             ->execute()
             ->fetchColumn();
         if ($revitalizationCount > 0) {
-            $queryBuilder->update('tx_realurl_pathcache', ['expire' => 0]);
+            $queryBuilder->update('tx_realurl_pathcache')->set('expire', 0)->execute();
         } else {
             $queryBuilderWithoutExpiration = clone $queryBuilder;
             $createCount = $queryBuilderWithoutExpiration->count('*')
@@ -475,7 +475,7 @@ class UriGeneratorAndResolver implements SingletonInterface
             $queryBuilder->expr()->eq('expire', 0),
             $queryBuilder->expr()->neq('pagepath', $queryBuilder->createNamedParameter($currentPagePath))
         );
-        $queryBuilder->update('tx_realurl_pathcache')->set('expire', $this->makeExpirationTime($expireDays));
+        $queryBuilder->update('tx_realurl_pathcache')->set('expire', $this->makeExpirationTime($expireDays))->execute();
     }
 
     /**
