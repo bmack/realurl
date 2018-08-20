@@ -55,7 +55,7 @@ CREATE TABLE tx_realurl_chashcache (
 #
 CREATE TABLE tx_realurl_urldecodecache (
 	url_hash char(32) DEFAULT '' NOT NULL,
-	spurl tinytext NOT NULL,
+	spurl text NOT NULL,
 	content blob NOT NULL,
 	page_id int(11) DEFAULT '0' NOT NULL,
 	rootpage_id int(11) DEFAULT '0' NOT NULL,
@@ -70,7 +70,7 @@ CREATE TABLE tx_realurl_urldecodecache (
 #
 CREATE TABLE tx_realurl_urlencodecache (
 	url_hash char(32) DEFAULT '' NOT NULL,
-	origparams tinytext NOT NULL,
+	origparams text NOT NULL,
 	internalExtras tinytext NOT NULL,
 	content text NOT NULL,
 	page_id int(11) DEFAULT '0' NOT NULL,
