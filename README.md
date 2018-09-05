@@ -1,9 +1,13 @@
-TYPO3 Extension realurl
-=======================
+TYPO3 Extension realurl v1 for TYPO3 v9
+=======================================
 
-This is an unofficial fork of the TYPO3 CMS Extension RealURL
+This is an unofficial fork of the TYPO3 CMS Extension RealURL.
+
+The fork was originally started by helhum/realurl, but due to lack of support for TYPO3 v9, this
+"fork of the fork" was built.
+
 It aims for no backwards compatibility with TYPO3 versions using RealURL 1.x since ages,
-and have a compatible version with TYPO3 v8 and TYPO3 v9.
+and have a compatible version with TYPO3 v9.
 
 As the class names changed the configuration needs some slight change, too:
 

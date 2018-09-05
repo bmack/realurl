@@ -1,14 +1,14 @@
 {
-	"name": "helhum/realurl",
+	"name": "bmack/realurl",
 	"type": "typo3-cms-extension",
-	"description": "RealURL: speaking paths for TYPO3",
-	"homepage": "http://typo3.org",
+	"description": "RealURL v1: speaking paths for TYPO3 v9",
 	"license": "GPL-2.0-or-later",
 	"require": {
 		"typo3/cms-core": "^9.3"
 	},
 	"replace": {
-		"realurl": "self.version"
+		"realurl": "self.version",
+		"helhum/realurl": "self.version"
 	},
 	"extra": {
 		"branch-alias": {
