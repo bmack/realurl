@@ -720,7 +720,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                      )
                     ->where(
                         $queryBuilder->expr()->eq('pages.deleted', 0),
-                        $queryBuilder->expr()->eq('pages.sys_language_uid', 0),
+                        $queryBuilder->expr()->eq('pages.sys_language_uid', $this->pObj->getDetectedLanguage() > 0 ? $this->pObj->getDetectedLanguage() : 0),
                         $queryBuilder->expr()->eq('rootpage_id', $queryBuilder->createNamedParameter($this->conf['rootpage_id'], \PDO::PARAM_INT)),
                         $queryBuilder->expr()->eq('pagepath', $queryBuilder->createNamedParameter(implode('/', $copy_pathParts)))
                     )
@@ -915,6 +915,9 @@ class UriGeneratorAndResolver implements SingletonInterface
                 unset($pages[$key]);
             }
         }
+        if (count($pages) === 0) {
+            return [0, ''];
+        }
         if (count($pages) > 1) {
             $idList = array();
             foreach ($pages as $page) {
@@ -990,6 +993,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                     $pagesOverlays[] = (int)$pagesOverlayParentId['pid'];
                 }
             }
+            return $pagesOverlays;
         }
         $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
             ->getQueryBuilderForTable('pages');
@@ -1114,6 +1118,7 @@ class UriGeneratorAndResolver implements SingletonInterface
      */
     protected function findPageBySegmentAndPid($searchPid, $title)
     {
+        $language = $this->pObj->getDetectedLanguage();
 
         // List of "pages" fields to traverse for a "directory title" in the speaking URL (only from RootLine!!)
         $segTitleFieldList = $this->conf['segTitleFieldList'] ?: TX_REALURL_SEGTITLEFIELDLIST_DEFAULT;
@@ -1195,9 +1200,9 @@ class UriGeneratorAndResolver implements SingletonInterface
         }
         // We have to search the language overlay too, if: a) the language isn't the default (0), b) if it's not set (-1)
         $uidTrackKeys = array_keys($uidTrack);
-        $language = $this->pObj->getDetectedLanguage();
         if ($language != 0) {
             $overlaidFields = GeneralUtility::trimExplode(',', TX_REALURL_SEGTITLEFIELDLIST_PLO, true);
+            $overlaysFound = false;
             foreach ($uidTrackKeys as $l_id) {
                 $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable('pages');
                 $queryBuilder->getRestrictions()->removeAll()->add(GeneralUtility::makeInstance(DeletedRestriction::class));
@@ -1211,6 +1216,7 @@ class UriGeneratorAndResolver implements SingletonInterface
                     );
                 $result = $queryBuilder->execute();
                 while (false != ($row = $result->fetch())) {
+                    $overlaysFound = true;
                     foreach ($segTitleFieldArray as $fieldName) {
                         if ($row[$fieldName]) {
                             $encodedTitle = $this->encodeTitle($row[$fieldName]);
@@ -1221,6 +1227,12 @@ class UriGeneratorAndResolver implements SingletonInterface
                     }
                 }
             }
+
+            // no overlays found, although explicitly requested, return null
+            if (!$overlaysFound) {
+                return [false, false, [], []];
+            }
+
         }
 
         // Merge titles
