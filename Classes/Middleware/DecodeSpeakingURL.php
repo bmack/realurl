@@ -25,6 +25,11 @@ use TYPO3\CMS\Frontend\Controller\TypoScriptFrontendController;
 
 /**
  * Middleware to alter the $request object after decoding the current speaking URL
+ *
+ * If in a PseudoSite we
+ *  * Set the siteScript (because realurl relies on that)
+ *  * Decode the URL
+ *  * Update the Request
  */
 class DecodeSpeakingURL implements MiddlewareInterface
 {
@@ -36,9 +41,11 @@ class DecodeSpeakingURL implements MiddlewareInterface
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
         if (($site = $request->getAttribute('site', null)) instanceof PseudoSite) {
+            $tsfe = $this->getTypoScriptFrontendController();
+            $tsfe->siteScript = $request->getAttribute('normalizedParams')->getSiteScript();
             $urlRewriter = GeneralUtility::makeInstance(UrlRewritingHook::class);
             $urlRewriter->decodeSpURL(
-                ['pObj' => $this->getTypoScriptFrontendController()]
+                ['pObj' => $tsfe]
             );
             $request = $request->withQueryParams($_GET);
             $GLOBALS['TYPO3_REQUEST'] = $request;
