@@ -11,10 +11,9 @@ $EM_CONF[$_EXTKEY] = array(
     'author' => 'Dmitry Dulepov',
     'author_email' => 'dmitry.dulepov@gmail.com',
     'author_company' => '',
-    'version' => '3.0.0',
+    'version' => '3.1.0',
     'constraints' => array(
         'depends' => array(
-            'php' => '5.5.0-7.1.999',
             'typo3' => '9.4.0-9.5.99',
         ),
         'conflicts' => array(

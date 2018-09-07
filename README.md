@@ -7,7 +7,7 @@ The fork was originally started by helhum/realurl, but due to lack of support fo
 "fork of the fork" was built.
 
 It aims for no backwards compatibility with TYPO3 versions using RealURL 1.x since ages,
-and have a compatible version with TYPO3 v9.
+and have a compatible version with TYPO3 v9. The minimum requirement is TYPO3 9.4.
 
 As the class names changed the configuration needs some slight change, too:
 
