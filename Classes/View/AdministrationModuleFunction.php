@@ -39,6 +39,10 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFunctionModule
 {
+
+    const ICON_ERROR = 'status-dialog-error';
+    const ICON_WARNING = 'status-dialog-warning';
+
     /**
      * @var int
      */
@@ -289,7 +293,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                             $editIcon = '<a href="#" onclick="' . htmlspecialchars($onClick) . '">' .
                                 $this->getIcon('actions-open') .
                                 '</a>';
-                            $onClick = BackendUtility::viewOnClick($row['row']['uid'], '', '', '',
+                            $onClick = BackendUtility::viewOnClick($row['row']['uid'], '', null, '',
                                 '&L=' . $olRec['sys_language_uid']);
                             $editIcon .= '<a href="#" onclick="' . htmlspecialchars($onClick) . '">' .
                                 $this->getIcon('actions-search') .
@@ -380,10 +384,10 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                     $error = '';
                     if (!strcmp($inf['pagepath'], '')) {
                         if ($row['row']['uid'] != $this->pObj->id) {    // Show error of "Empty" only for levels under the root. Yes, we cannot know that the pObj->id is the true root of the site, but at least any SUB page should probably have a path string!
-                            $error = $this->pObj->doc->icons(2) . 'Empty';
+                            $error = $this->getIcon(self::ICON_WARNING) . 'Empty';
                         }
                     } elseif (isset($trackSameUrl[$hash])) {
-                        $error = $this->pObj->doc->icons(2) . 'Already used on page ID ' . $trackSameUrl[$hash];
+                        $error = $this->getIcon(self::ICON_WARNING) . 'Already used on page ID ' . $trackSameUrl[$hash];
                     } else {
                         $error = '&nbsp;';
                     }
@@ -968,10 +972,10 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                         '</td>';
 
                     // Error:
-                    $eMsg = ($duplicates[$inf['content']] && $duplicates[$inf['content']] !== $row['row']['uid'] ? $this->pObj->doc->icons(2) . 'Already used on page ID ' . $duplicates[$inf['content']] . '<br/>' : '');
+                    $eMsg = ($duplicates[$inf['content']] && $duplicates[$inf['content']] !== $row['row']['uid'] ? $this->getIcon(self::ICON_WARNING) . 'Already used on page ID ' . $duplicates[$inf['content']] . '<br/>' : '');
                     if (count($GLOBALS['TYPO3_DB']->exec_SELECTgetRows('url_hash', 'tx_realurl_redirects',
                         'url_hash=' . intval(GeneralUtility::md5int($inf['content']))))) {
-                        $eMsg .= $this->pObj->doc->icons(3) . 'Also a redirect!';
+                        $eMsg .= $this->getIcon(self::ICON_ERROR) . 'Also a redirect!';
                     }
                     $tCells[] = '<td>' . $eMsg . '</td>';
 
@@ -1150,7 +1154,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
 
                 $keyForDuplicates = $aliasRecord['value_alias'] . ':::' . $aliasRecord['lang'];
                 $tCells[] = '<td>' .
-                    (isset($duplicates[$keyForDuplicates]) ? $this->pObj->doc->icons(2) . 'Already used by ID ' . $duplicates[$aliasRecord['value_alias']] : '&nbsp;') .
+                    (isset($duplicates[$keyForDuplicates]) ? $this->getIcon(self::ICON_WARNING) . 'Already used by ID ' . $duplicates[$aliasRecord['value_alias']] : '&nbsp;') .
                     '</td>';
 
                 $field_id = $aliasRecord['field_id'];
@@ -1589,7 +1593,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             'content=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($rec['url'], 'tx_realurl_urlencodecache'), '', '', '', '',
             'page_id'));
         if (count($pagesWithURL) > 0) {
-            $errorMessage .= $this->pObj->doc->icons(3) . 'Also a page URL: ' . implode(',',
+            $errorMessage .= $this->getIcon(self::ICON_ERROR) . 'Also a page URL: ' . implode(',',
                     array_unique($pagesWithURL));
         }
         $output .= '<td>' . $errorMessage . '</td>';
