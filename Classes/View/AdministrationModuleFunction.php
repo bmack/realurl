@@ -274,7 +274,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                     $editIcon = '<a href="#" onclick="' . htmlspecialchars($onClick) . '">' .
                         $this->getIcon('actions-open') .
                         '</a>';
-                    $onClick = BackendUtility::viewOnClick($row['row']['uid'], '', '', '', '');
+                    $onClick = BackendUtility::viewOnClick($row['row']['uid']);
                     $editIcon .= '<a href="#" onclick="' . htmlspecialchars($onClick) . '">' .
                         $this->getIcon('actions-search') .
                         '</a>';
