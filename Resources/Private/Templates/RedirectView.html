@@ -1,0 +1,12 @@
+<html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers" data-namespace-typo3-fluid="true">
+
+<f:be.infobox title="Realurl does no longer support the redirect feature." state="1">
+	<p><strong>Redirects are in the Core now!</strong><br />
+	Please migrate your redirects to the <em>sys_redirect</em> table of the TYPO3 core.</p>
+	<p>The table tx_realurl_redirects is still in your database.
+	Please perform a migration if you want to continue using these redirects.</p>
+</f:be.infobox>
+
+<f:be.link route="site_redirects" parameters="{1:1}" class="btn btn-primary">To the redirects module</f:be.link>
+
+</html>
