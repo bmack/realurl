@@ -145,8 +145,8 @@ class DataHandlerHook implements SingletonInterface
                         'value_id' => (int)$recordId
                     ],
                     [
-                        Connection::PARAM_INT,
                         Connection::PARAM_STR,
+                        Connection::PARAM_INT
                     ]
 
                 );

@@ -1062,46 +1062,6 @@ class UrlRewritingHook implements SingletonInterface
                 }
             }
         }
-
-        // DB defined redirects
-        $hash = GeneralUtility::md5int($speakingURIpath);
-        $domainId = $this->getCurrentDomainId();
-        /** @noinspection PhpUndefinedMethodInspection */
-        $queryBuilder = GeneralUtility::makeInstance(ConnectionPool::class)
-            ->getQueryBuilderForTable('tx_realurl_redirects');
-        $redirectRow = $queryBuilder
-            ->select('destination', 'has_moved', 'domain_limit', 'counter')
-            ->from('tx_realurl_redirects')
-            ->where(
-                $queryBuilder->expr()->eq('url_hash', $queryBuilder->createNamedParameter($hash)),
-                $queryBuilder->expr()->eq('url', $queryBuilder->createNamedParameter($speakingURIpath)),
-                $queryBuilder->expr()->orX(
-                    $queryBuilder->expr()->eq('domain_limit', 0),
-                    $queryBuilder->expr()->eq('domain_limit', $domainId)
-                )
-            )
-            ->orderBy('domain_limit', 'DESC')
-            ->execute()
-            ->fetch();
-        if (is_array($redirectRow)) {
-            // Update statistics
-            $queryBuilder->update('tx_realurl_redirects')
-                ->where(
-                    $queryBuilder->expr()->eq('url_hash', $queryBuilder->createNamedParameter($hash)),
-                    $queryBuilder->expr()->eq('url', $queryBuilder->createNamedParameter($speakingURIpath)),
-                    $queryBuilder->expr()->eq('domain_limit', $domainId)
-                )
-                ->set('counter', $redirectRow['counter']++)
-                ->set('tstamp', time())
-                ->set('last_referer', GeneralUtility::getIndpEnv('HTTP_REFERER'))
-                ->execute();
-
-            // Redirect
-            $redirectCode = ($redirectRow['has_moved'] ? 301 : 302);
-            header('HTTP/1.1 ' . $redirectCode . ' TYPO3 RealURL Redirect M' . __LINE__);
-            header('Location: ' . GeneralUtility::locationHeaderUrl($redirectRow['destination']));
-            exit();
-        }
     }
 
     /**
@@ -2926,6 +2886,6 @@ class UrlRewritingHook implements SingletonInterface
      */
     protected function getTimeTracker()
     {
-        return GeneralUtility::makeInstance('TYPO3\\CMS\\Core\\TimeTracker\\TimeTracker');
+        return GeneralUtility::makeInstance(TimeTracker::class);
     }
 }

@@ -31,8 +31,10 @@ namespace Tx\Realurl\View;
 use TYPO3\CMS\Backend\Tree\View\PageTreeView;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Database\Query\QueryBuilder;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Fluid\View\StandaloneView;
 
 /**
  * Class AdministrationModuleFunction
@@ -226,7 +228,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         $searchForm_replace = GeneralUtility::_POST('_replace');
         $searchForm_delete = GeneralUtility::_POST('_delete');
 
-        $trackSameUrl = array();
+        $trackSameUrl = [];
         $this->searchResultCounter = 0;
 
         // Traverse tree:
@@ -245,7 +247,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             if (!count($pathCacheInfo)) {
 
                 // Add title:
-                $tCells = array();
+                $tCells = [];
                 $tCells[] = '<td nowrap="nowrap"' . $cellAttrib . '>' . ($row['depthData'] ?: '') . $rowTitle . '</td>';
 
                 // Empty row:
@@ -266,7 +268,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                     $hash = $inf['pagepath'] . '|' . $inf['rootpage_id'] . '|' . $inf['language_id'];    // MP is not a part of this because the path itself should be different simply because the MP makes a different path! (see UriGeneratorAndResolver::pagePathtoID())
 
                     // Add icon/title and ID:
-                    $tCells = array();
+                    $tCells = [];
                     if (!$c) {
                         $tCells[] = '<td nowrap="nowrap" rowspan="' . count($pathCacheInfo) . '"' . $cellAttrib . '>' . $rowTitle . '</td>';
                         $tCells[] = '<td rowspan="' . count($pathCacheInfo) . '">' . $inf['page_id'] . '</td>';
@@ -299,7 +301,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                                 $this->getIcon('actions-search') .
                                 '</a>';
                         } else {
-                            $baseRow = array();
+                            $baseRow = [];
                         }
                     }
                     $tCells[] = '<td>' . $editIcon . '</td>';
@@ -414,7 +416,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         }
 
         // Create header:
-        $tCells = array();
+        $tCells = [];
         $tCells[] = '<th>Title</th>';
         $tCells[] = '<th>ID</th>';
         $tCells[] = '<th>&nbsp;</th>';
@@ -469,18 +471,34 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         $cmd = GeneralUtility::_GET('cmd');
         $entry = GeneralUtility::_GET('entry');
 
-        $res = $GLOBALS['TYPO3_DB']->exec_SELECTquery(
-            '*',
-            'tx_realurl_pathcache',
-            'page_id=' . intval($pageId) .
-            ((string)$showLanguage !== '' ? ' AND language_id=' . intval($showLanguage) : ''),
-            '',
-            'language_id,expire'
-        );
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_pathcache');
+        $constraints = [
+            $queryBuilder->expr()->eq(
+                'page_id',
+                $queryBuilder->createNamedParameter((int)$pageId, \PDO::PARAM_INT)
+            )
+        ];
+
+        if ((string)$showLanguage !== '' && (string)$showLanguage !== '0') {
+            $constraints[] = $queryBuilder->expr()->eq(
+                'language_id',
+                $queryBuilder->createNamedParameter((int)$showLanguage, \PDO::PARAM_INT)
+            );
+        }
+
+        $rows = $queryBuilder->select('*')
+            ->from('tx_realurl_pathcache')
+            ->where(
+                ...$constraints
+            )
+            ->addOrderBy('language_id')
+            ->addOrderBy('expire')
+            ->execute()
+            ->fetchAll();
 
         // Traverse result:
-        $output = array();
-        while (false != ($row = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res))) {
+        $output = [];
+        foreach ($rows as $row) {
 
             // Delete entries:
             if ($cmd === 'delete' && (!strcmp($entry, $row['cache_id']) || !strcmp($entry, 'ALL'))) {
@@ -498,8 +516,6 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                 $output[] = $row;
             }
         }
-        $GLOBALS['TYPO3_DB']->sql_free_result($res);
-
         return $output;
     }
 
@@ -636,7 +652,15 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
      */
     public function deletePathCacheEntry($cache_id)
     {
-        $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_pathcache', 'cache_id=' . intval($cache_id));
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_pathcache');
+        $queryBuilder->delete('tx_realurl_pathcache')
+            ->where(
+                $queryBuilder->expr()->eq(
+                    'cache_id',
+                    $queryBuilder->createNamedParameter((int)$cache_id, \PDO::PARAM_INT)
+                )
+            )
+            ->execute();
     }
 
     /**
@@ -648,8 +672,20 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
     public function raiseExpirePathCacheEntry(&$row)
     {
         $row['expire'] = time() + 30 * 24 * 3600;
-        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache',
-            'expire>0 AND cache_id=' . intval($row['cache_id']), array('expire' => $row['expire']));
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_pathcache');
+        $queryBuilder->update('tx_realurl_pathcache')
+            ->set('expire', $row['expire'])
+            ->where(
+                $queryBuilder->expr()->eq(
+                    'cache_id',
+                    $queryBuilder->createNamedParameter((int)$row['cache_id'], \PDO::PARAM_INT)
+                ),
+                $queryBuilder->expr()->gt(
+                    'expire',
+                    0
+                )
+            )
+            ->execute();
     }
 
     /**
@@ -660,21 +696,30 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
      */
     public function copyPathCacheEntry(&$oEntry)
     {
-
         // Select old record:
         $cEntry = $oEntry;
         unset($cEntry['cache_id']);
-        $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_pathcache', $cEntry);
-        $cEntry['cache_id'] = $GLOBALS['TYPO3_DB']->sql_insert_id();
+        $connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $databaseConnectionForPages = $connectionPool->getConnectionForTable('tx_realurl_pathcache');
+        $databaseConnectionForPages->insert(
+            'tx_realurl_pathcache',
+            $cEntry
+        );
+        $cEntry['cache_id'] = (int)$databaseConnectionForPages->lastInsertId('pages');
 
         // Update the old record with expire time:
         if (!$oEntry['expire']) {
             $oEntry['expire'] = time() + 30 * 24 * 3600;
-            $field_values = array(
-                'expire' => $oEntry['expire'],
-            );
-            $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache', 'cache_id=' . intval($oEntry['cache_id']),
-                $field_values);
+            $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_pathcache');
+            $queryBuilder->update('tx_realurl_pathcache')
+                ->where(
+                    $queryBuilder->expr()->eq(
+                        'cache_id',
+                        $queryBuilder->createNamedParameter((int)$oEntry['cache_id'], \PDO::PARAM_INT)
+                    )
+                )
+                ->set('expire', (int)$oEntry['expire'])
+                ->execute();
         }
 
         return $cEntry;
@@ -689,16 +734,32 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
      */
     public function editPathCacheEntry($cache_id, $value)
     {
-        $field_values = array(
-            'pagepath' => $value
-        );
-        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_pathcache', 'cache_id=' . intval($cache_id), $field_values);
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_pathcache');
+        $queryBuilder->update('tx_realurl_pathcache')
+            ->set('pagepath', $value)
+            ->where(
+                $queryBuilder->expr()->eq(
+                    'cache_id',
+                    $queryBuilder->createNamedParameter((int)$cache_id, \PDO::PARAM_INT)
+                )
+            )
+            ->execute();
 
         // Look up the page id so we can clear the encodeCache entries:
-        list($page_id_rec) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('page_id', 'tx_realurl_pathcache',
-            'cache_id=' . intval($cache_id));
-        $this->clearDEncodeCache('page_' . $page_id_rec['page_id']); // Encode cache
-        $this->clearDEncodeCache('page_' . $page_id_rec['page_id'], true);    // Decode cache
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_pathcache');
+        $pageId = $queryBuilder->select('page_id')
+            ->from('tx_realurl_pathcache')
+            ->where(
+                $queryBuilder->expr()->eq(
+                    'cache_id',
+                    $queryBuilder->createNamedParameter((int)$cache_id, \PDO::PARAM_INT)
+                )
+            )
+            ->execute()
+            ->fetchColumn(0);
+
+        $this->clearDEncodeCache('page_' . $pageId); // Encode cache
+        $this->clearDEncodeCache('page_' . $pageId, true);    // Decode cache
     }
 
     /**
@@ -761,8 +822,17 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         foreach ($tree->tree as $row) {
 
             // Select rows:
-            $displayRows = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('*', 'tx_realurl_urldecodecache',
-                'page_id=' . intval($row['row']['uid']), '', 'spurl');
+            $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_urldecodecache');
+            $displayRows = $queryBuilder->select('*')
+                ->from('tx_realurl_urldecodecache')
+                ->where(
+                    $queryBuilder->expr()->eq(
+                        'page_id',
+                        $queryBuilder->createNamedParameter((int)$row['row']['uid'], \PDO::PARAM_INT)
+                    )
+                )
+                ->execute()
+                ->fetchAll();
 
             // Row title:
             $rowTitle = $row['HTML'] . BackendUtility::getRecordTitle('pages', $row['row'], true);
@@ -771,7 +841,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             if (!count($displayRows) || $subcmd === 'displayed') {
 
                 // Add title:
-                $tCells = array();
+                $tCells = [];
                 $tCells[] = '<td nowrap="nowrap">' . ($row['depthData'] ?: '') . $rowTitle . '</td>';
 
                 // Empty row:
@@ -794,7 +864,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                 foreach ($displayRows as $c => $inf) {
 
                     // Add icon/title and ID:
-                    $tCells = array();
+                    $tCells = [];
                     if (!$c) {
                         $tCells[] = '<td nowrap="nowrap" rowspan="' . count($displayRows) . '">' . $rowTitle . '</td>';
                         $tCells[] = '<td nowrap="nowrap" rowspan="' . count($displayRows) . '">' . $row['row']['uid'] . '</td>';
@@ -837,11 +907,14 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             }
         }
 
-        list($count_allInTable) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('count(*) AS count',
-            'tx_realurl_urldecodecache', '');
+        $count = $this->getQueryBuilderForTable('tx_realurl_urldecodecache')
+            ->count('*')
+            ->from('tx_realurl_urldecodecache')
+            ->execute()
+            ->fetchColumn(0);
 
         // Create header:
-        $tCells = array();
+        $tCells = [];
         $tCells[] = '<th>Title</th>';
         $tCells[] = '<th>ID</th>';
         $tCells[] = '<th>&nbsp;</th>';
@@ -865,7 +938,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             $this->getIcon('actions-delete', 'Delete displayed entries') .
             '</a>' .
             '<br/>
-		Total entries in decode cache: <b>' . $count_allInTable['count'] . '</b> ' .
+		Total entries in decode cache: <b>' . $count . '</b> ' .
             '<a href="' . $this->linkSelf('&cmd=deleteDC&entry=all') . '">' .
             $this->getIcon('actions-delete', 'Delete WHOLE decode cache!') .
             '</a>' .
@@ -905,13 +978,23 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         $cc = 0;
         $countDisplayed = 0;
         $output = '';
-        $duplicates = array();
+        $duplicates = [];
 
         foreach ($tree->tree as $row) {
 
             // Select rows:
-            $displayRows = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('*', 'tx_realurl_urlencodecache',
-                'page_id=' . intval($row['row']['uid']), '', 'content');
+            $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_urlencodecache');
+            $displayRows = $queryBuilder->select('*')
+                ->from('tx_realurl_urlencodecache')
+                ->where(
+                    $queryBuilder->expr()->eq(
+                        'page_id',
+                        $queryBuilder->createNamedParameter((int)$row['row']['uid'], \PDO::PARAM_INT)
+                    )
+                )
+                ->orderBy('content')
+                ->execute()
+                ->fetchAll();
 
             // Row title:
             $rowTitle = $row['HTML'] . BackendUtility::getRecordTitle('pages', $row['row'], true);
@@ -920,7 +1003,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             if (!count($displayRows) || $subcmd === 'displayed') {
 
                 // Add title:
-                $tCells = array();
+                $tCells = [];
                 $tCells[] = '<td nowrap="nowrap">' . ($row['depthData'] ?: '') . $rowTitle . '</td>';
                 $tCells[] = '<td nowrap="nowrap">&nbsp;</td>';
 
@@ -943,7 +1026,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             } else {
                 foreach ($displayRows as $c => $inf) {
                     // Add icon/title and ID:
-                    $tCells = array();
+                    $tCells = [];
                     if (!$c) {
                         $tCells[] = '<td nowrap="nowrap" rowspan="' . count($displayRows) . '">' . $rowTitle . '</td>';
                         $tCells[] = '<td nowrap="nowrap" rowspan="' . count($displayRows) . '">' . $row['row']['uid'] . '</td>';
@@ -973,10 +1056,6 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
 
                     // Error:
                     $eMsg = ($duplicates[$inf['content']] && $duplicates[$inf['content']] !== $row['row']['uid'] ? $this->getIcon(self::ICON_WARNING) . 'Already used on page ID ' . $duplicates[$inf['content']] . '<br/>' : '');
-                    if (count($GLOBALS['TYPO3_DB']->exec_SELECTgetRows('url_hash', 'tx_realurl_redirects',
-                        'url_hash=' . intval(GeneralUtility::md5int($inf['content']))))) {
-                        $eMsg .= $this->getIcon(self::ICON_ERROR) . 'Also a redirect!';
-                    }
                     $tCells[] = '<td>' . $eMsg . '</td>';
 
                     // Timestamp:
@@ -999,11 +1078,14 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             }
         }
 
-        list($count_allInTable) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('count(*) AS count',
-            'tx_realurl_urlencodecache', '');
+        $count = $this->getQueryBuilderForTable('tx_realurl_urlencodecache')
+            ->count('*')
+            ->from('tx_realurl_urlencodecache')
+            ->execute()
+            ->fetchColumn(0);
 
         // Create header:
-        $tCells = array();
+        $tCells = [];
         $tCells[] = '<th>Title:</th>';
         $tCells[] = '<th>ID:</th>';
         $tCells[] = '<th>&nbsp;</th>';
@@ -1032,7 +1114,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             $this->getIcon('actions-delete', 'Delete displayed entries') .
             '</a>' .
             '<br/>
-		Total entries in encode cache: <b>' . $count_allInTable['count'] . '</b> ' .
+		Total entries in encode cache: <b>' . $count . '</b> ' .
             '<a href="' . $this->linkSelf('&cmd=deleteEC&entry=all') . '">' .
             $this->getIcon('actions-delete', 'Delete WHOLE encode cache!') .
             '</a>' .
@@ -1049,19 +1131,34 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
     public function clearDEncodeCache($cmd, $decodeCache = false)
     {
         $table = $decodeCache ? 'tx_realurl_urldecodecache' : 'tx_realurl_urlencodecache';
-
         list($keyword, $id) = explode('_', $cmd);
 
         switch ((string)$keyword) {
             case 'all':
-                $GLOBALS['TYPO3_DB']->exec_DELETEquery($table, '');
+                $queryBuilder = $this->getQueryBuilderForTable($table);
+                $queryBuilder->delete($table)->execute();
                 break;
             case 'page':
-                $GLOBALS['TYPO3_DB']->exec_DELETEquery($table, 'page_id=' . intval($id));
+                $queryBuilder = $this->getQueryBuilderForTable($table);
+                $queryBuilder->delete($table)
+                    ->where(
+                        $queryBuilder->expr()->eq(
+                            'page_id',
+                            $queryBuilder->createNamedParameter((int)$id, \PDO::PARAM_INT)
+                        )
+                    )
+                    ->execute();
                 break;
             case 'urlhash':
-                $GLOBALS['TYPO3_DB']->exec_DELETEquery($table,
-                    'url_hash=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($id, $table));
+                $queryBuilder = $this->getQueryBuilderForTable($table);
+                $queryBuilder->delete($table)
+                    ->where(
+                        $queryBuilder->expr()->eq(
+                            'url_hash',
+                            $queryBuilder->createNamedParameter($id, \PDO::PARAM_STR)
+                        )
+                    )
+                    ->execute();
                 break;
             default:
                 break;
@@ -1087,46 +1184,108 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         $search = GeneralUtility::_POST('search');
 
         // Select rows:
-        $overviewRows = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('tablename,count(*) as number_of_rows',
-            'tx_realurl_uniqalias', '', 'tablename', '', '', 'tablename');
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_uniqalias');
+        $res = $queryBuilder->select('tablename')
+            ->addSelectLiteral(
+                $queryBuilder->expr()->count('tablename', 'number_of_rows')
+            )
+            ->from('tx_realurl_uniqalias')
+            ->orderBy('tablename')
+            ->groupBy('tablename')
+            ->execute();
+
+        $overviewRows = [];
+        while ($row = $res->fetch()) {
+            if (!is_array($overviewRows[$row['tablename']])) {
+                $overviewRows[$row['tablename']] = $row;
+            }
+        }
 
         if ($tableName && isset($overviewRows[$tableName])) {    // Show listing of single table:
 
             // Some Commands:
             if ($cmd === 'delete') {
+                $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_uniqalias');
                 if ($entry === 'ALL') {
-                    $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_uniqalias',
-                        'tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($tableName, 'tx_realurl_uniqalias'));
+                    $queryBuilder->delete('tx_realurl_uniqalias')
+                        ->where(
+                            $queryBuilder->expr()->eq(
+                                'tablename',
+                                $queryBuilder->createNamedParameter($tableName, \PDO::PARAM_STR)
+                            )
+                        );
                 } else {
-                    $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_uniqalias',
-                        'tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($tableName,
-                            'tx_realurl_uniqalias') . ' AND uid=' . intval($entry));
+                    $queryBuilder->delete('tx_realurl_uniqalias')
+                        ->where(
+                            $queryBuilder->expr()->eq(
+                                'tablename',
+                                $queryBuilder->createNamedParameter($tableName, \PDO::PARAM_STR)
+                            ),
+                            $queryBuilder->expr()->eq(
+                                'uid',
+                                $queryBuilder->createNamedParameter((int)$entry, \PDO::PARAM_INT)
+                            )
+                        );
                 }
+                $queryBuilder->execute();
             }
             if ($cmd === 'flushExpired') {
-                $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_uniqalias',
-                    'tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($tableName,
-                        'tx_realurl_uniqalias') . ' AND expire>0 AND expire<' . intval(time()));
+                $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_uniqalias');
+                $queryBuilder->delete('tx_realurl_uniqalias')
+                    ->where(
+                        $queryBuilder->expr()->eq(
+                            'tablename',
+                            $queryBuilder->createNamedParameter($tableName, \PDO::PARAM_STR)
+                        ),
+                        $queryBuilder->expr()->gt(
+                            'expire',
+                            0
+                        ),
+                        $queryBuilder->expr()->lt(
+                            'expire',
+                            time()
+                        )
+                    )
+                    ->execute();
             }
 
             // Select rows:
-            $tableContent = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows(
-                '*',
-                'tx_realurl_uniqalias',
-                'tablename=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($tableName, 'tx_realurl_uniqalias') .
-                ($search ? ' AND (value_id=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($search,
-                        $tableName) . ' OR value_alias LIKE \'%' . $GLOBALS['TYPO3_DB']->quoteStr($search,
-                        $tableName) . '%\')' : ''),
-                '',
-                'value_id, lang, expire'
-            );
+            $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_uniqalias');
+            $constraints = [
+                $queryBuilder->expr()->eq(
+                    'tablename',
+                    $queryBuilder->createNamedParameter($tableName, \PDO::PARAM_STR)
+                )
+            ];
+
+            if (!empty($search)) {
+                $constraints[] = $queryBuilder->expr()->orX(
+                    $queryBuilder->expr()->eq(
+                        'value_id',
+                        $queryBuilder->createNamedParameter($search, \PDO::PARAM_STR)
+                    ),
+                    $queryBuilder->expr()->like(
+                        'value_alias',
+                        $queryBuilder->createNamedParameter('%' . $queryBuilder->escapeLikeWildcards($search) . '%', \PDO::PARAM_STR)
+                    )
+                );
+            }
+
+            $tableContent = $queryBuilder->select('*')
+                ->from('tx_realurl_uniqalias')
+                ->where(...$constraints)
+                ->addOrderBy('value_id')
+                ->addOrderBy('lang')
+                ->addOrderBy('expire')
+                ->execute()
+                ->fetchAll();
 
             $cc = 0;
             $field_id = $field_alias = $output = '';
-            $duplicates = array();
+            $duplicates = [];
             foreach ($tableContent as $aliasRecord) {
                 // Add data:
-                $tCells = array();
+                $tCells = [];
                 $tCells[] = '<td>' . htmlspecialchars($aliasRecord['value_id']) . '</td>';
 
                 if ((string)$cmd === 'edit' && ($entry === 'ALL' || !strcmp($entry, $aliasRecord['uid']))) {
@@ -1172,7 +1331,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             }
 
             // Create header:
-            $tCells = array();
+            $tCells = [];
             $tCells[] = '<td>ID (Field: ' . $field_id . ')</td>';
             $tCells[] = '<td>Alias (Field: ' . $field_alias . '):</td>';
             $tCells[] = '<td>Lang:</td>';
@@ -1219,7 +1378,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                 foreach ($overviewRows as $aliasRecord) {
 
                     // Add data:
-                    $tCells = array();
+                    $tCells = [];
                     $tCells[] = '<td><a href="' . $this->linkSelf('&table=' . rawurlencode($aliasRecord['tablename'])) . '">' . $aliasRecord['tablename'] . '</a></td>';
                     $tCells[] = '<td>' . $aliasRecord['number_of_rows'] . '</td>';
 
@@ -1260,10 +1419,16 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
      */
     public function editUniqAliasEntry($cache_id, $value)
     {
-        $field_values = array(
-            'value_alias' => $value
-        );
-        $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_uniqalias', 'uid=' . intval($cache_id), $field_values);
+        $queryBuilder = $this->getQueryBuilderForTable('tx_realurl_uniqalias');
+        $queryBuilder->update('tx_realurl_uniqalias')
+            ->set('value_alias', $value)
+            ->where(
+                $queryBuilder->expr()->eq(
+                    'uid',
+                    $queryBuilder->createNamedParameter((int)$cache_id, \PDO::PARAM_INT)
+                )
+            )
+            ->execute();
     }
 
     /**
@@ -1328,28 +1493,27 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
     {
         $cmd = GeneralUtility::_GP('cmd');
         if ($cmd === 'deleteAll') {
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery(
-                'tx_realurl_errorlog',
-                ''
-            );
+            $this->getQueryBuilderForTable('tx_realurl_errorlog')
+                ->delete('tx_realurl_errorlog')
+                ->execute();
         }
 
-        $list = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows(
-            '*',
-            'tx_realurl_errorlog',
-            '',
-            '',
-            'counter DESC, tstamp DESC',
-            100
-        );
+        $list = $this->getQueryBuilderForTable('tx_realurl_errorlog')
+            ->select('*')
+            ->from('tx_realurl_errorlog')
+            ->addOrderBy('counter', 'DESC')
+            ->addOrderBy('tstamp', 'DESC')
+            ->setMaxResults(250)
+            ->execute()
+            ->fetchAll();
 
         if (is_array($list)) {
             $output = '';
             $cc = 0;
-
+            $hostCacheName = [];
             foreach ($list as $rec) {
                 $host = '';
-                if ($rec['rootpage_id'] != 0) {
+                if ((int)$rec['rootpage_id'] !== 0) {
                     if (isset($hostCacheName[$rec['rootpage_id']])) {
                         $host = $hostCacheName[$rec['rootpage_id']];
                     } else {
@@ -1358,14 +1522,10 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                 }
 
                 // Add data:
-                $tCells = array();
+                $tCells = [];
                 $tCells[] = '<td>' . $rec['counter'] . '</td>';
                 $tCells[] = '<td>' . BackendUtility::dateTimeAge($rec['tstamp']) . '</td>';
-                $tCells[] = '<td><a href="' . htmlspecialchars($host . '/' . $rec['url']) . '" target="_blank">' . ($host ? $host . '/' : '') . htmlspecialchars($rec['url']) . '</a>' .
-                    ' <a href="' . $this->linkSelf('&cmd=new&data[0][source]=' . rawurlencode($rec['url']) . '&SET[type]=redirects') . '">' .
-                    $this->getIcon('actions-document-save', 'Set as redirect') .
-                    '</a>' .
-                    '</td>';
+                $tCells[] = '<td><a href="' . htmlspecialchars($host . '/' . $rec['url']) . '" target="_blank">' . ($host ? $host . '/' : '') . htmlspecialchars($rec['url']) . '</a></td>';
                 $tCells[] = '<td>' . htmlspecialchars($rec['error']) . '</td>';
                 $tCells[] = '<td>' .
                     ($rec['last_referer'] ? '<a href="' . htmlspecialchars($rec['last_referer']) . '" target="_blank">' . htmlspecialchars($rec['last_referer']) . '</a>' : '&nbsp;') .
@@ -1373,21 +1533,17 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
                 $tCells[] = '<td>' . BackendUtility::datetime($rec['cr_date']) . '</td>';
 
                 // Compile Row:
-                $output .= '
-					<tr class="bgColor' . ($cc % 2 ? '-20' : '-10') . '">
-						' . implode('
-						', $tCells) . '
-					</tr>';
+                $output .= '<tr class="bgColor' . ($cc % 2 ? '-20' : '-10') . '">' . implode('', $tCells) . '</tr>';
                 $cc++;
             }
             // Create header:
-            $tCells = array();
-            $tCells[] = '<td>Counter:</td>';
-            $tCells[] = '<td>Last time:</td>';
-            $tCells[] = '<td>URL:</td>';
-            $tCells[] = '<td>Error:</td>';
-            $tCells[] = '<td>Last Referer:</td>';
-            $tCells[] = '<td>First time:</td>';
+            $tCells = [];
+            $tCells[] = '<td>Count</td>';
+            $tCells[] = '<td>Last time</td>';
+            $tCells[] = '<td>URL</td>';
+            $tCells[] = '<td>Error</td>';
+            $tCells[] = '<td>Last Referer</td>';
+            $tCells[] = '<td>First time</td>';
 
             $output = '
 				<tr class="bgColor5 tableheader">
@@ -1396,8 +1552,7 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
 				</tr>' . $output;
 
             // Compile final table and return:
-            $output = '
-			<br/>
+            $output = '<br/>
 				<a href="' . $this->linkSelf('&cmd=deleteAll') . '">' .
                 $this->getIcon('actions-delete', 'Delete All') .
                 ' Flush log</a>
@@ -1426,109 +1581,19 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
         return '';
     }
 
-    /*****************************
-     *
-     * Redirect view:
-     *
-     *****************************/
-
     /**
      * Redirect view
      *
      * @return    string        HTML
+     * @deprecated
      */
     public function redirectView()
     {
-        $output = $this->processRedirectActions();
-
-        list($sortingParameter, $sortingDirection) = $this->getRedirectViewSortingParameters();
-
-        $output .= $this->getRedirectsSearch();
-        $output .= $this->getRedirectViewHeader($sortingDirection);
-        $output .= $this->getRedirectsTableContent($sortingParameter, $sortingDirection);
-
-        return $output;
-    }
-
-    protected function getRedirectsSearch()
-    {
-        $result = $this->getSearchField();
-        if (GeneralUtility::_GP('pathPrefixSearch')) {
-            $result .= ' <input type="reset" class="btn" name="_" value="' .
-                $this->getLanguageService()->getLL('show_all') . '" ' .
-                'onclick="document.getElementById(\'pathPrefixSearch\').value=\'\';document.forms[0].submit()" ' .
-                '/>';
-        }
-        $result .= '<input type="hidden" name="id" value="' . $this->pObj->id . '" />';
-
-        return '<br><div class="form-group">' . $result . '</div>';
-    }
-
-    /**
-     * Creates a list of redirect entries.
-     *
-     * @param string $sortingParameter
-     * @param string $sortingDirection
-     * @return string
-     */
-    protected function getRedirectsTableContent($sortingParameter, $sortingDirection)
-    {
-        $itemCounter = 0;
-
-        $page = max(1, intval(GeneralUtility::_GP('page')));
-        $resultsPerPage = $this->getResultsPerPage('redirects');
-
-        $condition = '';
-        $seachPath = GeneralUtility::_GP('pathPrefixSearch');
-        if ($seachPath) {
-            $seachPathDecoded = $GLOBALS['TYPO3_DB']->quoteStr(
-                $GLOBALS['TYPO3_DB']->escapeStrForLike(rawurlencode($seachPath), 'tx_realurl_redirects'),
-                'tx_realurl_redirects');
-            $seachPath = $GLOBALS['TYPO3_DB']->quoteStr(
-                $GLOBALS['TYPO3_DB']->escapeStrForLike($seachPath, 'tx_realurl_redirects'),
-                'tx_realurl_redirects');
-            $condition = 'url LIKE \'%' . $seachPathDecoded . '%\' OR ' .
-                'destination LIKE \'%' . $seachPath . '%\'';
-        }
-
-        $start = ($page - 1) * $resultsPerPage;
-        if ($sortingParameter !== 'domain_limit') {
-            $query = 'SELECT t1.* FROM tx_realurl_redirects t1' . ($condition ? ' WHERE ' . $condition : '') .
-                ' ORDER BY ' . $sortingParameter . ' ' . $sortingDirection .
-                ' LIMIT ' . $start . ',' . $resultsPerPage;
-        } else {
-            $query = 'SELECT t1.* FROM tx_realurl_redirects t1' .
-                ' LEFT JOIN sys_domain t2 ON t1.domain_limit=t2.uid' .
-                ($condition ? ' WHERE ' . $condition : '') .
-                ' ORDER BY ' . $sortingParameter . ' ' . $sortingDirection .
-                ' LIMIT ' . $start . ',' . $resultsPerPage;
-        }
-
-        $res = $GLOBALS['TYPO3_DB']->sql_query($query);
-        $output = '';
-        while (false !== ($rec = $GLOBALS['TYPO3_DB']->sql_fetch_assoc($res))) {
-            $output .= '<tr class="bgColor' . ($itemCounter % 2 ? '-20' : '-10') . '">' .
-                $this->generateSingleRedirectContent($rec, $page);
-            $itemCounter++;
-        }
-        $GLOBALS['TYPO3_DB']->sql_free_result($res);
-
-        list($count) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows(
-            'COUNT(*) AS t', 'tx_realurl_redirects', $condition);
-        $totalResults = $count['t'];
-        if ($totalResults > $resultsPerPage) {
-            $pageBrowser = GeneralUtility::makeInstance('Tx\\Realurl\\ViewHelpers\\PageBrowserViewHelper');
-            /** @var \Tx\Realurl\ViewHelpers\PageBrowserViewHelper $pageBrowser */
-            $results = sprintf($this->getLanguageService()->getLL('displaying_results'),
-                $start + 1, min($totalResults, ($start + $resultsPerPage)), $totalResults);
-            $output .= '<tr><td colspan="4" style="vertical-align:middle">' . $results . '</td>' .
-                '<td colspan="5" style="text-align: right">' . $pageBrowser->getPageBrowser($totalResults,
-                    $resultsPerPage) . '</td></tr>';
-        }
-
-        $output .= '</table>';
-
-        return $output;
+        $view = GeneralUtility::makeInstance(StandaloneView::class);
+        $view->setTemplatePathAndFilename(
+            'EXT:realurl/Resources/Private/Templates/RedirectView.html'
+        );
+        return $view->render();
     }
 
     /**
@@ -1546,422 +1611,6 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
     }
 
     /**
-     * Creates an HTML table row for a single redirect record.
-     *
-     * @param array $rec
-     * @param int $page
-     * @return string
-     */
-    protected function generateSingleRedirectContent(array $rec, $page)
-    {
-        $output = '<td>' .
-            '<a href="' . $this->linkSelf('&cmd=edit&uid=' . rawurlencode($rec['uid'])) . '&page=' . $page . '">' .
-            $this->getIcon('actions-open', 'Edit entry') .
-            '</a>' .
-            '<a href="' . $this->linkSelf('&cmd=delete&uid=' . rawurlencode($rec['uid'])) . '&page=' . $page . '">' .
-            $this->getIcon('actions-delete', 'Delete entry') .
-            '</a>' .
-            '</td>';
-        $output .= sprintf('<td><a href="%s" target="_blank">/%s</a></td>',
-            htmlspecialchars(GeneralUtility::getIndpEnv('TYPO3_SITE_URL') . $rec['url']),
-            htmlspecialchars($rec['url']));
-        $destinationURL = $this->getDestinationRedirectURL($rec['destination']);
-        $output .= sprintf('<td><a href="%1$s" target="_blank" title="%1$s">%2$s</a></td>',
-            htmlspecialchars($destinationURL), htmlspecialchars(GeneralUtility::fixed_lgd_cs($destinationURL, 30)));
-        $output .= '<td>' . htmlspecialchars($this->getRedirectDomain($rec['domain_limit'])) . '</td>';
-        $output .= '<td align="center">' . ($rec['has_moved'] ? '+' : '&nbsp;') . '</td>';
-        $output .= '<td align="center">' . $rec['counter'] . '</td>';
-
-        if ($rec['tstamp']) {
-            $output .= '<td>' . BackendUtility::dateTimeAge($rec['tstamp']) . '</td>';
-        } else {
-            $output .= '<td align="center">&mdash;</td>';
-        }
-
-        if ($rec['last_referer']) {
-            $lastRef = htmlspecialchars($rec['last_referer']);
-            $output .= sprintf('<td><a href="%s" target="_blank" title="%s">%s</a></td>', $lastRef, $lastRef,
-                (strlen($rec['last_referer']) > 30) ? htmlspecialchars(substr($rec['last_referer'], 0,
-                        30)) . '...' : $lastRef);
-        } else {
-            $output .= '<td>&nbsp;</td>';
-        }
-
-        // Error:
-        $errorMessage = '';
-        $pagesWithURL = array_keys($GLOBALS['TYPO3_DB']->exec_SELECTgetRows('page_id', 'tx_realurl_urlencodecache',
-            'content=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($rec['url'], 'tx_realurl_urlencodecache'), '', '', '', '',
-            'page_id'));
-        if (count($pagesWithURL) > 0) {
-            $errorMessage .= $this->getIcon(self::ICON_ERROR) . 'Also a page URL: ' . implode(',',
-                    array_unique($pagesWithURL));
-        }
-        $output .= '<td>' . $errorMessage . '</td>';
-
-        return $output;
-    }
-
-    /**
-     * Obtains domain name by its id.
-     *
-     * @param int $domainId
-     * @return string
-     */
-    protected function getRedirectDomain($domainId)
-    {
-        $result = ' ';
-        if ($domainId != 0) {
-            list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('domainName',
-                'sys_domain', 'uid=' . intval($domainId)
-            );
-            if (is_array($row)) {
-                $result = $row['domainName'];
-            }
-        }
-        return $result;
-    }
-
-    /**
-     * Creates a header for the redirects table.
-     *
-     * @return string
-     */
-    protected function getRedirectViewHeader($sortingDirection)
-    {
-        $sortingDirection = ($sortingDirection == 'ASC' ? 'DESC' : 'ASC');
-        return '<br><br><table class="table table-striped table-bordered table-condensed table-hover" id="tx-realurl-pathcacheTable">' .
-            '<thead><tr>' .
-            '<td>&nbsp;</td>' .
-            sprintf('<th><a href="%s">Source:</a></th>',
-                sprintf('index.php?id=%d&SET[type]=%s&SET[ob]=url&SET[obdir]=%s', $this->pObj->id,
-                    $this->pObj->MOD_SETTINGS['type'], $sortingDirection)) .
-            sprintf('<th><a href="%s">Redirect to:</a></th>',
-                sprintf('index.php?id=%d&SET[type]=%s&SET[ob]=destination&SET[obdir]=%s', $this->pObj->id,
-                    $this->pObj->MOD_SETTINGS['type'], $sortingDirection)) .
-            sprintf('<th><a href="%s">Domain:</a></th>',
-                sprintf('index.php?id=%d&SET[type]=%s&SET[ob]=domain_limit&SET[obdir]=%s', $this->pObj->id,
-                    $this->pObj->MOD_SETTINGS['type'], $sortingDirection)) .
-            sprintf('<th><a href="%s">Permanent:</a></th>',
-                sprintf('index.php?id=%d&SET[type]=%s&SET[ob]=has_moved&SET[obdir]=%s', $this->pObj->id,
-                    $this->pObj->MOD_SETTINGS['type'], $sortingDirection)) .
-            sprintf('<th><a href="%s">Hits:</a></th>',
-                sprintf('index.php?id=%d&SET[type]=%s&SET[ob]=counter&SET[obdir]=%s', $this->pObj->id,
-                    $this->pObj->MOD_SETTINGS['type'], $sortingDirection)) .
-            '<th>Last hit time:</th>' .
-            sprintf('<th><a href="%s">Last referer:</a></th>',
-                sprintf('index.php?id=%d&SET[type]=%s&SET[ob]=last_referer&SET[obdir]=%s', $this->pObj->id,
-                    $this->pObj->MOD_SETTINGS['type'], $sortingDirection)) .
-            '<th>Errors:</th></tr></thead>';
-    }
-
-    /**
-     * Creates sorting parameters for the redirect view.
-     *
-     * @return array
-     */
-    protected function getRedirectViewSortingParameters()
-    {
-        session_start();
-        $gpVars = GeneralUtility::_GP('SET');
-        if (isset($gpVars['ob'])) {
-            $sortingParameter = $gpVars['ob'];
-            if (!GeneralUtility::inList('url,destination,domain_limit,has_moved,counter,last_referer',
-                $sortingParameter)) {
-                $sortingParameter = '';
-                $sortingDirection = '';
-            } else {
-                $sortingDirection = strtoupper($gpVars['obdir']);
-                if ($sortingDirection != 'DESC' && $sortingDirection != 'ASC') {
-                    $sortingDirection = '';
-                }
-            }
-            $_SESSION['realurl']['redirects_view']['sorting'] = array($sortingParameter, $sortingDirection);
-        } elseif (!isset($_SESSION['realurl']['redirects_view']['sorting'])) {
-            $_SESSION['realurl']['redirects_view']['sorting'] = array('url', 'ASC');
-        }
-
-        return $_SESSION['realurl']['redirects_view']['sorting'];
-    }
-
-    /**
-     * Processes redirect view actions according to request parameters.
-     *
-     * @return string
-     */
-    protected function processRedirectActions()
-    {
-        switch (GeneralUtility::_GP('cmd')) {
-            case 'new':
-            case 'edit':
-                $output = $this->getProcessForm();
-                break;
-            case 'delete':
-                $this->deleteRedirectEntry();
-            // Fall through
-            default:
-                $output = $this->getNewButton();
-                break;
-        }
-        return $output;
-    }
-
-    /**
-     * Deletes a redirect entry.
-     *
-     * @return    void
-     */
-    protected function deleteRedirectEntry()
-    {
-        $uid = GeneralUtility::_GP('uid');
-        if ($uid) {
-            $GLOBALS['TYPO3_DB']->exec_DELETEquery('tx_realurl_redirects',
-                'uid=' . intval($uid)
-            );
-        }
-    }
-
-    /**
-     * Creates a code for 'Add new entries' button
-     *
-     * @return string
-     */
-    protected function getNewButton()
-    {
-        return '<div class="form-group"><a href="' . $this->linkSelf('&cmd=new') . '">' . $this->getIcon('actions-document-new',
-                'New entry') . ' Add new redirects</a></div>';
-    }
-
-    /**
-     * Checks form submission for 'new' and 'edit' actions and performs whatever
-     * is necessary to add or edit data. Returns the form if necessary.
-     *
-     * @return    string    HTML
-     */
-    protected function getProcessForm()
-    {
-        $content = $error = '';
-        if (!GeneralUtility::_POST('_edit_cancel')) {
-            if ($this->processRedirectSubmission($error)) {
-                // Submission successful -- show "New" button
-                $content = $this->getNewButton();
-            } else {
-                // Submission error or no submission
-                if ($error) {
-                    $error = '<div style="color:red;margin-bottom:.5em;font-weight:bold">Problem found! ' . $error . '</div>';
-                }
-                $hint = '<div style="margin:.5em 0">' .
-                    'Note: the exact source URL will match! Add a slash to the end ' .
-                    'of the URL if necessary!</div>';
-                if (!GeneralUtility::_GP('uid')) {
-                    $content .= '<h2>Add new redirects</h2>' . $error . $hint .
-                        $this->getRedirectNewForm();
-                } else {
-                    $content .= '<h2>Edit a redirect</h2>' . $error . $hint . $this->getRedirectEditForm();
-                }
-                $content .= '<input type="hidden" name="id" value="' . htmlspecialchars($this->pObj->id) . '" />';
-                $content .= '<input type="hidden" name="cmd" value="' . htmlspecialchars(GeneralUtility::_GP('cmd')) . '" />';
-            }
-        }
-        return $content;
-    }
-
-    /**
-     * Creates a form to edit an entry
-     *
-     * @return    string    Generated HTML
-     */
-    protected function getRedirectEditForm()
-    {
-        $content = '';
-        $uid = GeneralUtility::_GP('uid');
-        list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows(
-            'url,url_hash,destination,has_moved,domain_limit', 'tx_realurl_redirects',
-            'uid=' . intval($uid));
-        if (is_array($row)) {
-            $page = max(1, intval(GeneralUtility::_GP('page')));
-            $content = '<table class="table table-condensed">' .
-                '<tr><td>Redirect from:</td>' .
-                '<td width="1">/</td><td><input type="text" name="data[0][source]" value="' . htmlspecialchars($row['url']) . '" size="40" /></td></tr>' .
-                '<tr><td colspan="2">Redirect to:</td>' .
-                '<td><input type="text" name="data[0][target]" value="' . htmlspecialchars($row['destination']) . '" size="40" /></td></tr>' .
-                '<tr><td colspan="2">Domain:</td></td>' .
-                '<td><select name="data[0][domain_limit]">' . $this->getRedirectDomainOptions(intval($row['domain_limit'])) . '</select></td></tr>' .
-                '<tr><td colspan="2"></td>' .
-                '<td><input type="checkbox" name="data[0][permanent]" ' . ($row['has_moved'] ? ' checked="checked"' : '') . ' /> Permanent redirect (send "301 Moved permanently" header)</td></tr>' .
-                '<tr><td colspan="2"></td><td>' . $this->saveCancelButtons() . '</td></tr>' .
-                '</table>' .
-                '<input type="hidden" name="data[0][uid]" value="' . intval($uid) . '" />' .
-                '<input type="hidden" name="data[0][url_hash]" value="' . $row['url_hash'] . '" />' .
-                '<input type="hidden" name="page" value="' . intval($page) . '" />';
-        }
-        return $content;
-    }
-
-    /**
-     * Creates a form for the new entries
-     *
-     * @return    string    Generated HTML
-     */
-    protected function getRedirectNewForm()
-    {
-        $content = '<table class="table table-condensed">';
-
-        // Show the form header
-        $content .= '<thead><tr><th>Source URL</th><th>Destination URL:</th><th>Domain:</th><th>Permanent:</th></tr></thead>';
-
-        // Show fields
-        $data = GeneralUtility::_GP('data');
-        $max = count($data);
-        if (!is_array($data)) {
-            $data = array();
-            $max = 10;
-        }
-        for ($i = 0; $i < $max; $i++) {
-            $content .= '<tr><td>
-<div class="input-group">
-  <span class="input-group-addon">/</span>' .
-                '<input class="form-control" type="text" size="30" name="data[' . $i . '][source]" value="' .
-                (isset($data[$i]['source']) ? htmlspecialchars($data[$i]['source']) : '') . '" /></div></td><td>' .
-                '<input class="form-control" type="text" size="30" name="data[' . $i . '][target]" value="' .
-                (isset($data[$i]['target']) ? htmlspecialchars($data[$i]['target']) : '') . '" /></td><td>' .
-                '<select class="form-control" name="data[' . $i . '][domain_limit]">' . $this->getRedirectDomainOptions(intval($data[$i]['domain_limit'])) . '</select></td><td>' .
-                '<input type="checkbox" name="data[' . $i . '][permanent]" ' .
-                (isset($data[$i]['target']) ? ($data[$i]['target'] ? ' checked="checked"' : '') : '') . ' /></td>' .
-                '</tr>';
-        }
-        $content .= '<tr><td colspan="4">' . $this->saveCancelButtons() . '</td></tr>' .
-            '</table>';
-
-        return $content;
-    }
-
-    /**
-     * Creates a list of options for the domain selector box.
-     *
-     * @param int $selectedDomain
-     * @return string
-     */
-    protected function getRedirectDomainOptions($selectedDomain)
-    {
-        static $domainList = null;
-
-        if (is_null($domainList)) {
-            $domainList = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('uid,domainName',
-                'sys_domain', '', '', 'domainName'
-            );
-        }
-
-        $result = '<option value="0">' . htmlspecialchars($this->getLanguageService()->getLL('all_domains')) . '</option>';
-        foreach ($domainList as $domainRecord) {
-            $result .= '<option value="' . $domainRecord['uid'] . '"' .
-                ($domainRecord['uid'] == $selectedDomain ? ' selected="selected"' : '') . '>' .
-                htmlspecialchars($domainRecord['domainName']) .
-                '</option>';
-        }
-        return $result;
-    }
-
-    /**
-     * Processes submission
-     *
-     * @param    string $error Error message
-     * @return    bool    true if successful
-     */
-    protected function processRedirectSubmission(&$error)
-    {
-        $result = false;
-        $error = '';
-        if (GeneralUtility::_GP('_edit_save')) {
-            $data = GeneralUtility::_GP('data');
-            $databaseUpdateData = array();
-            $databaseInsertData = array();
-            foreach ($data as $fields) {
-                //
-                // Validate
-                //
-                $fields['source'] = strtolower(trim($fields['source']));
-                $fields['target'] = trim($fields['target']);
-                // Check empty or same
-                if ($fields['source'] == $fields['target']) {
-                    // Either equal or empty, ignore the input
-                    continue;
-                }
-                // Check one field empty
-                if (trim($fields['source']) == '' || trim($fields['target'] == '')) {
-                    $error = 'Please, fill in both source and destination URLs';
-                    return false;
-                }
-                // Check for duplicate source URLs
-                $andWhere = ($fields['url_hash'] != '' ? ' AND url_hash<>' . intval($fields['url_hash']) : '');
-                list($row) = $GLOBALS['TYPO3_DB']->exec_SELECTgetRows('COUNT(*) AS t',
-                    'tx_realurl_redirects',
-                    'url=' . $GLOBALS['TYPO3_DB']->fullQuoteStr($fields['source'], 'tx_realurl_redirects') .
-                    ' AND domain_limit=' . intval($fields['domain_limit']) .
-                    $andWhere);
-                if ($row['t'] > 0) {
-                    $error = 'Source URL \'/' . htmlspecialchars($fields['source']) . '\' already exists in the redirect list.';
-                    return false;
-                }
-                // Check for missing slash in destination
-                $parse = @parse_url($fields['target']);
-                if ($fields['target']{0} != '/' && ($parse === false || !isset($parse['scheme']))) {
-                    $fields['target'] = '/' . $fields['target'];
-                }
-
-                // Process
-                if ($fields['url_hash'] == '') {
-                    // New entry
-                    $databaseInsertData[] = array(
-                        'url_hash' => GeneralUtility::md5int($fields['source']),
-                        'url' => $fields['source'],
-                        'destination' => $fields['target'],
-                        'has_moved' => $fields['permanent'] ? 1 : 0,
-                        'domain_limit' => intval($fields['domain_limit'])
-                    );
-                } else {
-                    // Existing entry
-                    $databaseUpdateData[$fields['uid']] = array(
-                        'url_hash' => GeneralUtility::md5int($fields['source']),
-                        'url' => $fields['source'],
-                        'destination' => $fields['target'],
-                        'has_moved' => $fields['permanent'] ? 1 : 0,
-                        'domain_limit' => intval($fields['domain_limit'])
-                    );
-                }
-            }
-            // Add/update data
-            foreach ($databaseInsertData as $data) {
-                $GLOBALS['TYPO3_DB']->exec_INSERTquery('tx_realurl_redirects', $data);
-            }
-            foreach ($databaseUpdateData as $uid => $data) {
-                $GLOBALS['TYPO3_DB']->exec_UPDATEquery('tx_realurl_redirects',
-                    'uid=' . intval($uid),
-                    $data);
-            }
-            // Make sure we return success if the form is totally empty
-            $result = true;
-        }
-        return $result;
-    }
-
-    /**
-     * Obtains destination URL for the redirect.
-     *
-     * @param string $url
-     * @return string
-     */
-    protected function getDestinationRedirectURL($url)
-    {
-        $parts = @parse_url($url);
-        if (!is_array($parts) || empty($parts['scheme'])) {
-            if ($url{0} != '/') {
-                $url = '/' . $url;
-            }
-        }
-        return $url;
-    }
-
-    /**
      * @param string $icon
      * @param string $title
      * @return string
@@ -1973,5 +1622,14 @@ class AdministrationModuleFunction extends \TYPO3\CMS\Backend\Module\AbstractFun
             $icon = '<span title="' . htmlspecialchars($title) . '">' . $icon . '</span>';
         }
         return $icon;
+    }
+
+    /**
+     * @param string $table
+     * @return QueryBuilder
+     */
+    protected function getQueryBuilderForTable(string $table): QueryBuilder
+    {
+        return GeneralUtility::makeInstance(ConnectionPool::class)->getQueryBuilderForTable($table);
     }
 }
